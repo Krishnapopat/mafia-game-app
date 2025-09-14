@@ -1,40 +1,18 @@
-import { redirect } from "next/navigation"
-import { createClient } from "@/lib/supabase/server"
 import { GameRoom } from "@/components/game-room"
 
 interface GamePageProps {
-  params: Promise<{ id: string }>
+  params: {
+    id: string
+  }
 }
 
-export default async function GamePage({ params }: GamePageProps) {
-  const { id } = await params
-  const supabase = await createClient()
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) {
-    redirect("/auth/login")
-  }
-
-  // Check if user is in this game
-  const { data: participant } = await supabase
-    .from("game_participants")
-    .select("*")
-    .eq("game_id", id)
-    .eq("player_id", user.id)
-    .single()
-
-  if (!participant) {
-    redirect("/")
-  }
-
-  // Get game room data
-  const { data: gameRoom } = await supabase.from("game_rooms").select("*").eq("id", id).single()
-
-  if (!gameRoom) {
-    redirect("/")
-  }
-
-  return <GameRoom gameId={id} />
+export default function GamePage({ params }: GamePageProps) {
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
+      <div className="absolute inset-0 bg-[url('/placeholder-raawb.png')] opacity-5"></div>
+      <div className="relative z-10">
+        <GameRoom gameId={params.id} />
+      </div>
+    </div>
+  )
 }

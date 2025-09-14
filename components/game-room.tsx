@@ -1,9 +1,6 @@
 "use client"
 
-import type React from "react"
-
 import { useState, useEffect } from "react"
-import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -21,6 +18,7 @@ import {
   ArrowLeft,
   Target,
   Vote,
+  EyeOff,
 } from "lucide-react"
 import { useRouter } from "next/navigation"
 
@@ -29,21 +27,22 @@ interface GameRoomProps {
 }
 
 interface Player {
-  id: string
+  id: number
   username: string
 }
 
 interface GameParticipant {
-  id: string
-  player_id: string
+  id: number
+  player_id: number
   role: string
   is_alive: boolean
   is_host: boolean
-  players: Player
+  last_healed_player_id?: number
+  username: string
 }
 
 interface GameRoom {
-  id: string
+  id: number
   room_code: string
   name: string
   status: string
@@ -51,19 +50,18 @@ interface GameRoom {
   day_number: number
   max_players: number
   current_players: number
-  host_id: string
-  phase_end_time: string | null
+  host_id: number
   winner?: string
+  role_config?: string
+  doctor_can_heal_same_twice?: boolean
 }
 
 interface GameMessage {
-  id: string
+  id: number
   message: string
   message_type: string
   created_at: string
-  players: Player | null
-  visible_to_player_id?: string
-  is_visible_to_all?: boolean
+  username?: string
 }
 
 const ROLE_ICONS = {
@@ -71,6 +69,7 @@ const ROLE_ICONS = {
   mafia: Skull,
   doctor: Shield,
   detective: Search,
+  fake_detective: EyeOff,
   jester: Zap,
   bandit: Zap,
 }
@@ -80,6 +79,7 @@ const ROLE_COLORS = {
   mafia: "bg-red-600",
   doctor: "bg-green-600",
   detective: "bg-purple-600",
+  fake_detective: "bg-orange-600",
   jester: "bg-yellow-600",
   bandit: "bg-orange-600",
 }
@@ -91,156 +91,68 @@ export function GameRoom({ gameId }: GameRoomProps) {
   const [currentPlayer, setCurrentPlayer] = useState<GameParticipant | null>(null)
   const [newMessage, setNewMessage] = useState("")
   const [timeLeft, setTimeLeft] = useState<number | null>(null)
-  const [selectedTarget, setSelectedTarget] = useState<string | null>(null)
+  const [selectedTarget, setSelectedTarget] = useState<number | null>(null)
   const [hasActed, setHasActed] = useState(false)
-  const [votes, setVotes] = useState<{ [key: string]: string }>({})
-  const [playerActions, setPlayerActions] = useState<{ [key: string]: any }>({})
+  const [error, setError] = useState<string | null>(null)
   const router = useRouter()
 
   useEffect(() => {
-    const supabase = createClient()
-
-    const fetchGameData = async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser()
-      if (!user) return
-
-      // Get game room
-      const { data: roomData } = await supabase.from("game_rooms").select("*").eq("id", gameId).single()
-
-      setGameRoom(roomData)
-
-      // Get participants
-      const { data: participantsData } = await supabase
-        .from("game_participants")
-        .select(`
-          *,
-          players (id, username)
-        `)
-        .eq("game_id", gameId)
-        .order("joined_at")
-
-      setParticipants(participantsData || [])
-
-      // Find current player
-      const currentParticipant = participantsData?.find((p) => p.player_id === user.id)
-      setCurrentPlayer(currentParticipant || null)
-
-      // Get messages
-      const { data: messagesData } = await supabase
-        .from("game_messages")
-        .select(`
-          *,
-          players (id, username)
-        `)
-        .eq("game_id", gameId)
-        .order("created_at")
-
-      setMessages(messagesData || [])
-
-      const { data: actionsData } = await supabase
-        .from("game_actions")
-        .select("*")
-        .eq("game_id", gameId)
-        .eq("phase", roomData?.current_phase || "night")
-        .eq("day_number", roomData?.day_number || 1)
-
-      const actionsMap: { [key: string]: any } = {}
-      actionsData?.forEach((action) => {
-        actionsMap[action.player_id] = action
-      })
-      setPlayerActions(actionsMap)
-
-      // Check if current player has acted
-      const currentPlayerAction = actionsData?.find((a) => a.player_id === user.id)
-      setHasActed(!!currentPlayerAction)
-      if (currentPlayerAction) {
-        setSelectedTarget(currentPlayerAction.target_id)
-      }
-    }
-
     fetchGameData()
-
-    // Subscribe to real-time updates
-    const gameSubscription = supabase
-      .channel(`game_${gameId}`)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "game_rooms", filter: `id=eq.${gameId}` },
-        fetchGameData,
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "game_participants", filter: `game_id=eq.${gameId}` },
-        fetchGameData,
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "game_messages", filter: `game_id=eq.${gameId}` },
-        fetchGameData,
-      )
-      .subscribe()
-
-    return () => {
-      gameSubscription.unsubscribe()
-    }
+    const interval = setInterval(fetchGameData, 2000) // Poll every 2 seconds
+    return () => clearInterval(interval)
   }, [gameId])
 
-  // Timer countdown
-  useEffect(() => {
-    if (!gameRoom?.phase_end_time) return
+  const fetchGameData = async () => {
+    try {
+      const [roomRes, participantsRes, messagesRes] = await Promise.all([
+        fetch(`/api/games/${gameId}`),
+        fetch(`/api/games/${gameId}/participants`),
+        fetch(`/api/games/${gameId}/messages`)
+      ])
 
-    const interval = setInterval(() => {
-      const endTime = new Date(gameRoom.phase_end_time!).getTime()
-      const now = new Date().getTime()
-      const difference = endTime - now
-
-      if (difference > 0) {
-        setTimeLeft(Math.floor(difference / 1000))
-      } else {
-        setTimeLeft(0)
+      if (roomRes.ok) {
+        const room = await roomRes.json()
+        setGameRoom(room)
       }
-    }, 1000)
 
-    return () => clearInterval(interval)
-  }, [gameRoom?.phase_end_time])
+      if (participantsRes.ok) {
+        const participantsData = await participantsRes.json()
+        setParticipants(participantsData)
+        
+        // Find current player
+        const savedPlayer = localStorage.getItem('mafia_player')
+        if (savedPlayer) {
+          const player = JSON.parse(savedPlayer)
+          const currentParticipant = participantsData.find((p: GameParticipant) => p.player_id === player.id)
+          setCurrentPlayer(currentParticipant || null)
+        }
+      }
+
+      if (messagesRes.ok) {
+        const messagesData = await messagesRes.json()
+        setMessages(messagesData)
+      }
+    } catch (error) {
+      console.error('Error fetching game data:', error)
+    }
+  }
 
   const handleStartGame = async () => {
     if (!currentPlayer?.is_host || !gameRoom) return
 
-    const supabase = createClient()
-
-    // Assign roles randomly
-    const roles = ["mafia", "mafia", "doctor", "detective", "villager", "villager", "villager", "jester"]
-    const shuffledRoles = [...roles].sort(() => Math.random() - 0.5)
-
     try {
-      // Update participants with roles
-      for (let i = 0; i < participants.length; i++) {
-        const role = shuffledRoles[i] || "villager"
-        await supabase.from("game_participants").update({ role }).eq("id", participants[i].id)
+      const response = await fetch(`/api/games/${gameId}/start`, {
+        method: 'POST'
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.message)
       }
 
-      // Update game status
-      await supabase
-        .from("game_rooms")
-        .update({
-          status: "night",
-          current_phase: "night",
-          day_number: 1,
-          phase_end_time: new Date(Date.now() + 60000).toISOString(), // 1 minute
-        })
-        .eq("id", gameId)
-
-      // Add system message
-      await supabase.from("game_messages").insert({
-        game_id: gameId,
-        message: "The game has started! Night phase begins. Mafia, choose your target.",
-        message_type: "system",
-      })
-    } catch (error) {
-      console.error("Error starting game:", error)
+      fetchGameData()
+    } catch (error: any) {
+      setError(error.message)
     }
   }
 
@@ -248,254 +160,92 @@ export function GameRoom({ gameId }: GameRoomProps) {
     e.preventDefault()
     if (!newMessage.trim() || !currentPlayer) return
 
-    const supabase = createClient()
-
     try {
-      await supabase.from("game_messages").insert({
-        game_id: gameId,
-        player_id: currentPlayer.player_id,
-        message: newMessage.trim(),
-        message_type: "chat",
+      const response = await fetch(`/api/games/${gameId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: newMessage.trim(),
+          player_id: currentPlayer.player_id
+        })
       })
 
-      setNewMessage("")
+      if (response.ok) {
+        setNewMessage("")
+        fetchGameData()
+      }
     } catch (error) {
-      console.error("Error sending message:", error)
+      console.error('Error sending message:', error)
     }
   }
 
   const handleNightAction = async () => {
     if (!currentPlayer || !selectedTarget || !gameRoom) return
 
-    const supabase = createClient()
-    let actionType = ""
-
-    switch (currentPlayer.role) {
-      case "mafia":
-        actionType = "kill"
-        break
-      case "doctor":
-        actionType = "heal"
-        break
-      case "detective":
-        actionType = "investigate"
-        break
-      default:
-        return
-    }
-
     try {
-      await supabase.from("game_actions").insert({
-        game_id: gameId,
-        player_id: currentPlayer.player_id,
-        action_type: actionType,
-        target_id: selectedTarget,
-        phase: gameRoom.current_phase,
-        day_number: gameRoom.day_number,
+      const response = await fetch(`/api/games/${gameId}/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action_type: currentPlayer.role === 'mafia' ? 'kill' : 
+                      currentPlayer.role === 'doctor' ? 'heal' : 'investigate',
+          target_id: selectedTarget,
+          player_id: currentPlayer.player_id
+        })
       })
 
-      setHasActed(true)
-
-      // Add system message for confirmation
-      await supabase.from("game_messages").insert({
-        game_id: gameId,
-        message: `You have chosen your target for the night.`,
-        message_type: "system",
-        player_id: currentPlayer.player_id,
-        is_visible_to_all: false,
-      })
+      if (response.ok) {
+        setHasActed(true)
+        fetchGameData()
+      }
     } catch (error) {
-      console.error("Error performing night action:", error)
+      console.error('Error performing action:', error)
     }
   }
 
   const handleVote = async () => {
     if (!currentPlayer || !selectedTarget || !gameRoom) return
 
-    const supabase = createClient()
-
     try {
-      // Remove previous vote if exists
-      await supabase
-        .from("game_actions")
-        .delete()
-        .eq("game_id", gameId)
-        .eq("player_id", currentPlayer.player_id)
-        .eq("action_type", "vote")
-        .eq("phase", gameRoom.current_phase)
-        .eq("day_number", gameRoom.day_number)
-
-      // Add new vote
-      await supabase.from("game_actions").insert({
-        game_id: gameId,
-        player_id: currentPlayer.player_id,
-        action_type: "vote",
-        target_id: selectedTarget,
-        phase: gameRoom.current_phase,
-        day_number: gameRoom.day_number,
-      })
-
-      setHasActed(true)
-
-      // Add public message about vote
-      const targetPlayer = participants.find((p) => p.player_id === selectedTarget)
-      await supabase.from("game_messages").insert({
-        game_id: gameId,
-        message: `${currentPlayer.players.username} voted to eliminate ${targetPlayer?.players.username}`,
-        message_type: "vote",
-      })
-    } catch (error) {
-      console.error("Error voting:", error)
-    }
-  }
-
-  const handlePhaseTransition = async () => {
-    if (!currentPlayer?.is_host || !gameRoom) return
-
-    const supabase = createClient()
-
-    try {
-      if (gameRoom.current_phase === "night") {
-        // Process night actions
-        const { data: nightActions } = await supabase
-          .from("game_actions")
-          .select("*")
-          .eq("game_id", gameId)
-          .eq("phase", "night")
-          .eq("day_number", gameRoom.day_number)
-
-        // Find kill target
-        const killAction = nightActions?.find((a) => a.action_type === "kill")
-        const healAction = nightActions?.find((a) => a.action_type === "heal")
-        const investigateAction = nightActions?.find((a) => a.action_type === "investigate")
-
-        if (killAction && (!healAction || healAction.target_id !== killAction.target_id)) {
-          // Kill the target
-          await supabase
-            .from("game_participants")
-            .update({ is_alive: false })
-            .eq("game_id", gameId)
-            .eq("player_id", killAction.target_id)
-
-          const victim = participants.find((p) => p.player_id === killAction.target_id)
-          await supabase.from("game_messages").insert({
-            game_id: gameId,
-            message: `${victim?.players.username} was eliminated during the night.`,
-            message_type: "death",
-          })
-        }
-
-        // Process investigation
-        if (investigateAction) {
-          const target = participants.find((p) => p.player_id === investigateAction.target_id)
-          const investigator = participants.find((p) => p.player_id === investigateAction.player_id)
-
-          await supabase.from("game_messages").insert({
-            game_id: gameId,
-            player_id: investigateAction.player_id,
-            message: `Investigation result: ${target?.players.username} is a ${target?.role}.`,
-            message_type: "system",
-            visible_to_player_id: investigateAction.player_id,
-            is_visible_to_all: false,
-          })
-        }
-
-        const { data: winCheck } = await supabase.rpc("check_win_condition", { game_room_id: gameId })
-
-        if (winCheck && winCheck !== "ongoing") {
-          await supabase.rpc("end_game", { game_room_id: gameId, winner: winCheck })
-          return
-        }
-
-        // Transition to day
-        await supabase
-          .from("game_rooms")
-          .update({
-            current_phase: "day",
-            status: "day",
-            phase_end_time: new Date(Date.now() + 120000).toISOString(), // 2 minutes
-          })
-          .eq("id", gameId)
-      } else if (gameRoom.current_phase === "day") {
-        // Process votes
-        const { data: votesData } = await supabase
-          .from("game_actions")
-          .select("*")
-          .eq("game_id", gameId)
-          .eq("action_type", "vote")
-          .eq("phase", "day")
-          .eq("day_number", gameRoom.day_number)
-
-        // Count votes
-        const voteCount: { [key: string]: number } = {}
-        votesData?.forEach((vote) => {
-          voteCount[vote.target_id] = (voteCount[vote.target_id] || 0) + 1
+      const response = await fetch(`/api/games/${gameId}/vote`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          target_id: selectedTarget,
+          player_id: currentPlayer.player_id
         })
+      })
 
-        // Find player with most votes
-        let maxVotes = 0
-        let eliminatedPlayer = null
-        for (const [playerId, count] of Object.entries(voteCount)) {
-          if (count > maxVotes) {
-            maxVotes = count
-            eliminatedPlayer = playerId
-          }
-        }
-
-        if (eliminatedPlayer && maxVotes > 0) {
-          await supabase
-            .from("game_participants")
-            .update({ is_alive: false })
-            .eq("game_id", gameId)
-            .eq("player_id", eliminatedPlayer)
-
-          const victim = participants.find((p) => p.player_id === eliminatedPlayer)
-          await supabase.from("game_messages").insert({
-            game_id: gameId,
-            message: `${victim?.players.username} was eliminated by vote. They were a ${victim?.role}.`,
-            message_type: "death",
-          })
-
-          const { data: winCheck } = await supabase.rpc("check_win_condition", { game_room_id: gameId })
-
-          if (winCheck && winCheck !== "ongoing") {
-            await supabase.rpc("end_game", { game_room_id: gameId, winner: winCheck })
-            return
-          }
-        }
-
-        // Transition to night
-        await supabase
-          .from("game_rooms")
-          .update({
-            current_phase: "night",
-            status: "night",
-            day_number: gameRoom.day_number + 1,
-            phase_end_time: new Date(Date.now() + 60000).toISOString(), // 1 minute
-          })
-          .eq("id", gameId)
+      if (response.ok) {
+        setHasActed(true)
+        fetchGameData()
       }
     } catch (error) {
-      console.error("Error transitioning phase:", error)
+      console.error('Error voting:', error)
     }
-  }
-
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60)
-    const secs = seconds % 60
-    return `${mins}:${secs.toString().padStart(2, "0")}`
   }
 
   const getAvailableTargets = () => {
     if (!currentPlayer || !currentPlayer.is_alive) return []
 
-    if (gameRoom.current_phase === "night") {
+    if (gameRoom?.current_phase === "night") {
       if (currentPlayer.role === "mafia") {
         return participants.filter((p) => p.is_alive && p.role !== "mafia" && p.player_id !== currentPlayer.player_id)
-      } else if (currentPlayer.role === "doctor" || currentPlayer.role === "detective") {
+      } else if (currentPlayer.role === "doctor") {
+        const canHealSameTwice = gameRoom.doctor_can_heal_same_twice
+        if (canHealSameTwice) {
+          return participants.filter((p) => p.is_alive && p.player_id !== currentPlayer.player_id)
+        } else {
+          return participants.filter((p) => 
+            p.is_alive && 
+            p.player_id !== currentPlayer.player_id &&
+            p.player_id !== currentPlayer.last_healed_player_id
+          )
+        }
+      } else if (currentPlayer.role === "detective" || currentPlayer.role === "fake_detective") {
         return participants.filter((p) => p.is_alive && p.player_id !== currentPlayer.player_id)
       }
-    } else if (gameRoom.current_phase === "day") {
+    } else if (gameRoom?.current_phase === "day") {
       return participants.filter((p) => p.is_alive && p.player_id !== currentPlayer.player_id)
     }
 
@@ -503,7 +253,7 @@ export function GameRoom({ gameId }: GameRoomProps) {
   }
 
   const availableTargets = getAvailableTargets()
-  const canAct = currentPlayer.is_alive && !hasActed && availableTargets.length > 0
+  const canAct = currentPlayer?.is_alive && !hasActed && availableTargets.length > 0
 
   if (!gameRoom || !currentPlayer) {
     return (
@@ -513,8 +263,12 @@ export function GameRoom({ gameId }: GameRoomProps) {
     )
   }
 
-  const RoleIcon = ROLE_ICONS[currentPlayer.role as keyof typeof ROLE_ICONS] || Users
-  const roleColor = ROLE_COLORS[currentPlayer.role as keyof typeof ROLE_COLORS] || "bg-gray-600"
+  // Don't show role badge in lobby phase
+  const shouldShowRole = gameRoom.status !== "waiting" && gameRoom.current_phase !== "lobby"
+  const displayRole = shouldShowRole ? currentPlayer.role : null
+
+  const RoleIcon = displayRole ? ROLE_ICONS[displayRole as keyof typeof ROLE_ICONS] : Users
+  const roleColor = displayRole ? ROLE_COLORS[displayRole as keyof typeof ROLE_COLORS] : "bg-gray-600"
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
@@ -539,18 +293,26 @@ export function GameRoom({ gameId }: GameRoomProps) {
           </div>
 
           <div className="flex items-center gap-4">
-            {timeLeft !== null && gameRoom.status !== "waiting" && (
-              <div className="flex items-center gap-2 text-white">
-                <Clock className="w-5 h-5" />
-                <span className="text-xl font-mono">{formatTime(timeLeft)}</span>
-              </div>
+            {shouldShowRole && (
+              <Badge className={`${roleColor} text-white`}>
+                <RoleIcon className="w-4 h-4 mr-1" />
+                {displayRole?.charAt(0).toUpperCase() + displayRole?.slice(1).replace('_', ' ')}
+              </Badge>
             )}
-            <Badge className={`${roleColor} text-white`}>
-              <RoleIcon className="w-4 h-4 mr-1" />
-              {currentPlayer.role.charAt(0).toUpperCase() + currentPlayer.role.slice(1)}
-            </Badge>
+            {!shouldShowRole && (
+              <Badge className="bg-gray-600 text-white">
+                <Users className="w-4 h-4 mr-1" />
+                Waiting for Game Start
+              </Badge>
+            )}
           </div>
         </div>
+
+        {error && (
+          <div className="mb-4 p-3 bg-red-900/30 border border-red-600 rounded-lg">
+            <p className="text-red-200 text-sm">{error}</p>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           {/* Players Panel */}
@@ -566,8 +328,7 @@ export function GameRoom({ gameId }: GameRoomProps) {
                 <div className="space-y-2">
                   {participants.map((participant) => {
                     const ParticipantRoleIcon = ROLE_ICONS[participant.role as keyof typeof ROLE_ICONS] || Users
-                    const participantRoleColor =
-                      ROLE_COLORS[participant.role as keyof typeof ROLE_COLORS] || "bg-gray-600"
+                    const participantRoleColor = ROLE_COLORS[participant.role as keyof typeof ROLE_COLORS] || "bg-gray-600"
 
                     return (
                       <div
@@ -590,12 +351,12 @@ export function GameRoom({ gameId }: GameRoomProps) {
                         <div className="flex items-center gap-2">
                           {participant.is_host && <Crown className="w-4 h-4 text-yellow-400" />}
                           <span className={`${participant.is_alive ? "text-white" : "text-slate-500 line-through"}`}>
-                            {participant.players.username}
+                            {participant.username}
                           </span>
                         </div>
                         <div className="flex items-center gap-2">
                           {!participant.is_alive && <Skull className="w-4 h-4 text-red-400" />}
-                          {gameRoom.status !== "waiting" && (
+                          {shouldShowRole && (
                             <Badge size="sm" className={`${participantRoleColor} text-white`}>
                               <ParticipantRoleIcon className="w-3 h-3" />
                             </Badge>
@@ -626,6 +387,7 @@ export function GameRoom({ gameId }: GameRoomProps) {
                         {currentPlayer.role === "mafia" && "Kill Target"}
                         {currentPlayer.role === "doctor" && "Heal Target"}
                         {currentPlayer.role === "detective" && "Investigate Target"}
+                        {currentPlayer.role === "fake_detective" && "Investigate Target"}
                       </Button>
                     )}
                     {gameRoom.current_phase === "day" && (
@@ -643,15 +405,6 @@ export function GameRoom({ gameId }: GameRoomProps) {
                       {gameRoom.current_phase === "night" ? "Action submitted" : "Vote cast"}
                     </p>
                   </div>
-                )}
-
-                {currentPlayer.is_host && timeLeft === 0 && (
-                  <Button
-                    onClick={handlePhaseTransition}
-                    className="w-full mt-4 bg-yellow-600 hover:bg-yellow-700 text-white"
-                  >
-                    Next Phase
-                  </Button>
                 )}
               </CardContent>
             </Card>
@@ -683,7 +436,6 @@ export function GameRoom({ gameId }: GameRoomProps) {
                 </CardTitle>
               </CardHeader>
               <CardContent className="h-full flex flex-col">
-                {/* Game Status */}
                 <div className="flex-1 flex items-center justify-center">
                   {gameRoom.status === "waiting" ? (
                     <div className="text-center">
@@ -733,7 +485,7 @@ export function GameRoom({ gameId }: GameRoomProps) {
                       {currentPlayer.is_alive && gameRoom.status !== "finished" && (
                         <div className="bg-slate-700/30 p-4 rounded-lg border border-slate-600">
                           <p className="text-white font-medium mb-2">
-                            Your Role: {currentPlayer.role.charAt(0).toUpperCase() + currentPlayer.role.slice(1)}
+                            Your Role: {currentPlayer.role.charAt(0).toUpperCase() + currentPlayer.role.slice(1).replace('_', ' ')}
                           </p>
                           <p className="text-slate-300 text-sm">
                             {gameRoom.current_phase === "night" &&
@@ -741,15 +493,18 @@ export function GameRoom({ gameId }: GameRoomProps) {
                               "Choose a player to eliminate"}
                             {gameRoom.current_phase === "night" &&
                               currentPlayer.role === "doctor" &&
-                              "Choose a player to protect"}
+                              (gameRoom.doctor_can_heal_same_twice 
+                                ? "Choose a player to protect (no restrictions)"
+                                : "Choose a player to protect (cannot heal same person twice in a row)"
+                              )}
                             {gameRoom.current_phase === "night" &&
                               currentPlayer.role === "detective" &&
-                              "Choose a player to investigate"}
+                              "Choose a player to investigate (you will get truthful results)"}
                             {gameRoom.current_phase === "night" &&
-                              currentPlayer.role === "villager" &&
-                              "Sleep tight, you have no night action"}
+                              currentPlayer.role === "fake_detective" &&
+                              "Choose a player to investigate (your results may be incorrect)"}
                             {gameRoom.current_phase === "night" &&
-                              currentPlayer.role === "jester" &&
+                              (currentPlayer.role === "villager" || currentPlayer.role === "jester" || currentPlayer.role === "bandit") &&
                               "Sleep tight, you have no night action"}
                             {gameRoom.current_phase === "day" &&
                               currentPlayer.role === "jester" &&
@@ -792,10 +547,14 @@ export function GameRoom({ gameId }: GameRoomProps) {
                       className={`p-2 rounded text-sm ${
                         message.message_type === "system"
                           ? "bg-blue-900/30 text-blue-200 italic"
+                          : message.message_type === "vote"
+                          ? "bg-yellow-900/30 text-yellow-200"
+                          : message.message_type === "death"
+                          ? "bg-red-900/30 text-red-200"
                           : "bg-slate-700/30 text-slate-200"
                       }`}
                     >
-                      {message.players && <span className="font-medium text-white">{message.players.username}: </span>}
+                      {message.username && <span className="font-medium text-white">{message.username}: </span>}
                       {message.message}
                     </div>
                   ))}

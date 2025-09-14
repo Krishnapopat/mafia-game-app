@@ -19,6 +19,7 @@ import {
   Target,
   Vote,
   EyeOff,
+  LogOut,
 } from "lucide-react"
 import { useRouter } from "next/navigation"
 
@@ -197,6 +198,9 @@ export function GameRoom({ gameId }: GameRoomProps) {
       if (response.ok) {
         setHasActed(true)
         fetchGameData()
+      } else {
+        const error = await response.json()
+        setError(error.message)
       }
     } catch (error) {
       console.error('Error performing action:', error)
@@ -222,6 +226,29 @@ export function GameRoom({ gameId }: GameRoomProps) {
       }
     } catch (error) {
       console.error('Error voting:', error)
+    }
+  }
+
+  const handleLeaveGame = async () => {
+    if (!currentPlayer) return
+
+    if (confirm('Are you sure you want to leave the game?')) {
+      try {
+        const response = await fetch('/api/participants', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            game_id: parseInt(gameId),
+            player_id: currentPlayer.player_id
+          })
+        })
+
+        if (response.ok) {
+          router.push('/')
+        }
+      } catch (error) {
+        console.error('Error leaving game:', error)
+      }
     }
   }
 
@@ -284,7 +311,7 @@ export function GameRoom({ gameId }: GameRoomProps) {
               className="border-slate-600 text-slate-300 hover:bg-slate-700"
             >
               <ArrowLeft className="w-4 h-4 mr-2" />
-              Leave Game
+              Back to Lobby
             </Button>
             <div>
               <h1 className="text-2xl font-bold text-white">{gameRoom.name}</h1>
@@ -305,6 +332,15 @@ export function GameRoom({ gameId }: GameRoomProps) {
                 Waiting for Game Start
               </Badge>
             )}
+            <Button
+              onClick={handleLeaveGame}
+              variant="outline"
+              size="sm"
+              className="border-red-600 text-red-400 hover:bg-red-900/30"
+            >
+              <LogOut className="w-4 h-4 mr-2" />
+              Leave Game
+            </Button>
           </div>
         </div>
 
@@ -490,7 +526,7 @@ export function GameRoom({ gameId }: GameRoomProps) {
                           <p className="text-slate-300 text-sm">
                             {gameRoom.current_phase === "night" &&
                               currentPlayer.role === "mafia" &&
-                              "Choose a player to eliminate"}
+                              "Choose a player to eliminate (coordinate with other mafia members)"}
                             {gameRoom.current_phase === "night" &&
                               currentPlayer.role === "doctor" &&
                               (gameRoom.doctor_can_heal_same_twice 
@@ -499,7 +535,7 @@ export function GameRoom({ gameId }: GameRoomProps) {
                               )}
                             {gameRoom.current_phase === "night" &&
                               currentPlayer.role === "detective" &&
-                              "Choose a player to investigate (you will get truthful results)"}
+                              "Choose a player to investigate (you will get immediate results)"}
                             {gameRoom.current_phase === "night" &&
                               currentPlayer.role === "fake_detective" &&
                               "Choose a player to investigate (your results may be incorrect)"}

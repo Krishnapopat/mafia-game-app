@@ -208,6 +208,37 @@ export function GameLobby() {
     }
   }
 
+  const handleJoinRoom = async (roomId: number) => {
+    if (!player) return
+
+    setIsLoading(true)
+    setError(null)
+    
+    try {
+      const response = await fetch('/api/participants', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          game_id: roomId,
+          player_id: player.id,
+          is_host: false,
+        })
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.message)
+      }
+
+      // Navigate to the game room
+      router.push(`/game/${roomId}`)
+    } catch (error: any) {
+      setError(error.message)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
   const handleDeleteRoom = async (roomId: number) => {
     if (!player) return
     
@@ -644,13 +675,13 @@ export function GameLobby() {
                       </div>
                       <div className="flex items-center gap-2">
                         <Button
-                          onClick={() => router.push(`/game/${room.id}`)}
-                          disabled={room.current_players >= room.max_players}
+                          onClick={() => handleJoinRoom(room.id)}
+                          disabled={isLoading || room.current_players >= room.max_players}
                           className="bg-purple-600 hover:bg-purple-700 text-white"
                           size="sm"
                         >
                           <Play className="w-4 h-4 mr-1" />
-                          Join
+                          {isLoading ? "Joining..." : "Join"}
                         </Button>
                         {room.host_id === player.id && (
                           <Button

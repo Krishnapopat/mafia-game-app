@@ -199,23 +199,47 @@ export const players = {
 
   async deleteOldPlayers() {
     if (isProduction) {
-      // Delete players created more than 1 hour ago
-      await pool!.query(
-        'DELETE FROM players WHERE created_at < NOW() - INTERVAL \'1 hour\''
-      );
+      // First, delete old players who are NOT hosts of active rooms
+      await pool!.query(`
+        DELETE FROM players 
+        WHERE created_at < NOW() - INTERVAL '1 hour'
+        AND id NOT IN (
+          SELECT DISTINCT host_id 
+          FROM game_rooms 
+          WHERE status IN ('waiting', 'in_progress')
+        )
+      `);
       return;
     }
     
     if (isVercel) {
       if (!memoryDb) await initDatabase();
       const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-      memoryDb.players = memoryDb.players.filter((p: any) => p.created_at > oneHourAgo);
+      
+      // Get active room host IDs
+      const activeHostIds = memoryDb.game_rooms
+        .filter((r: any) => r.status === 'waiting' || r.status === 'in_progress')
+        .map((r: any) => r.host_id);
+      
+      // Only delete players who are not active hosts
+      memoryDb.players = memoryDb.players.filter((p: any) => 
+        p.created_at > oneHourAgo || activeHostIds.includes(p.id)
+      );
       return;
     }
     
     const db = await readDb();
     const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    db.players = db.players.filter((p: any) => p.created_at > oneHourAgo);
+    
+    // Get active room host IDs
+    const activeHostIds = db.game_rooms
+      .filter((r: any) => r.status === 'waiting' || r.status === 'in_progress')
+      .map((r: any) => r.host_id);
+    
+    // Only delete players who are not active hosts
+    db.players = db.players.filter((p: any) => 
+      p.created_at > oneHourAgo || activeHostIds.includes(p.id)
+    );
     await writeDb(db);
   }
 };

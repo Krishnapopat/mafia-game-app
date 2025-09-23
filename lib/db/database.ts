@@ -1,50 +1,28 @@
-import { promises as fs } from 'fs';
-import { join } from 'path';
-import { Pool } from 'pg';
+import { Pool } from 'pg'
+import fs from 'fs/promises'
+import path from 'path'
 
-const dbPath = join(process.cwd(), 'data');
-const dbFile = join(dbPath, 'mafia_game.json');
+// Check if we're in production (PostgreSQL)
+const isProduction = process.env.DATABASE_URL && process.env.NODE_ENV === 'production'
+const isVercel = process.env.VERCEL === '1'
 
-// Check if we have a DATABASE_URL (production)
-const isProduction = !!process.env.DATABASE_URL;
-const isVercel = process.env.VERCEL === '1';
-
-// PostgreSQL connection pool for production
-let pool: Pool | null = null;
-
-// Initialize PostgreSQL connection
-function initPostgres() {
-  if (!isProduction || pool) return;
-  
+// PostgreSQL connection pool
+let pool: Pool | null = null
+if (isProduction) {
   pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-  });
+  })
 }
 
-// In-memory database for Vercel (fallback)
-let memoryDb: any = null;
+// In-memory database for Vercel
+let memoryDb: any = null
 
-// Ensure the database directory exists (only for local development)
-async function ensureDbDir() {
-  if (isProduction || isVercel) return; // Skip for production/Vercel
-  
-  try {
-    await fs.access(dbPath);
-  } catch {
-    await fs.mkdir(dbPath, { recursive: true });
-  }
-}
+// JSON file database for local development
+const DB_FILE = path.join(process.cwd(), 'data', 'mafia_game.json')
 
-// Initialize database
 async function initDatabase() {
-  if (isProduction) {
-    initPostgres();
-    return;
-  }
-  
   if (isVercel) {
-    // For Vercel without DATABASE_URL, use in-memory database
     if (!memoryDb) {
       memoryDb = {
         players: [],
@@ -52,151 +30,119 @@ async function initDatabase() {
         game_participants: [],
         game_actions: [],
         game_messages: []
-      };
+      }
     }
-    return;
+    return
   }
   
-  await ensureDbDir();
+  const dbDir = path.dirname(DB_FILE)
+  try {
+    await fs.access(dbDir)
+  } catch {
+    await fs.mkdir(dbDir, { recursive: true })
+  }
   
   try {
-    await fs.access(dbFile);
+    await fs.access(DB_FILE)
   } catch {
-    // Create initial database structure
-    const initialDb = {
+    const initialData = {
       players: [],
       game_rooms: [],
       game_participants: [],
       game_actions: [],
       game_messages: []
-    };
-    await fs.writeFile(dbFile, JSON.stringify(initialDb, null, 2));
+    }
+    await fs.writeFile(DB_FILE, JSON.stringify(initialData, null, 2))
   }
 }
 
-// Read database
 async function readDb() {
-  if (isProduction || isVercel) return memoryDb;
-  
-  const data = await fs.readFile(dbFile, 'utf-8');
-  return JSON.parse(data);
-}
-
-// Write database
-async function writeDb(data: any) {
-  if (isProduction || isVercel) {
-    memoryDb = data;
-    return;
+  if (isVercel) {
+    if (!memoryDb) await initDatabase()
+    return memoryDb
   }
   
-  await fs.writeFile(dbFile, JSON.stringify(data, null, 2));
+  await initDatabase()
+  const data = await fs.readFile(DB_FILE, 'utf-8')
+  return JSON.parse(data)
 }
 
-// Generate room code
-export function generateRoomCode(): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  let result = '';
-  for (let i = 0; i < 6; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
+async function writeDb(db: any) {
+  if (isVercel) {
+    if (!memoryDb) await initDatabase()
+    memoryDb = db
+    return
   }
-  return result;
+  
+  await fs.writeFile(DB_FILE, JSON.stringify(db, null, 2))
 }
 
-// Player operations
 export const players = {
   async create(username: string) {
     if (isProduction) {
       const result = await pool!.query(
-        'INSERT INTO players (username, games_played, games_won) VALUES ($1, 0, 0) RETURNING *',
+        'INSERT INTO players (username, created_at) VALUES ($1, NOW()) RETURNING *',
         [username]
-      );
-      return result.rows[0];
+      )
+      return result.rows[0]
     }
     
     if (isVercel) {
-      if (!memoryDb) await initDatabase();
+      if (!memoryDb) await initDatabase()
       const newPlayer = {
         id: Date.now(),
         username,
         games_played: 0,
         games_won: 0,
         created_at: new Date().toISOString()
-      };
-      memoryDb.players.push(newPlayer);
-      return newPlayer;
+      }
+      memoryDb.players.push(newPlayer)
+      return newPlayer
     }
     
-    const db = await readDb();
+    const db = await readDb()
     const newPlayer = {
       id: Date.now(),
       username,
       games_played: 0,
       games_won: 0,
       created_at: new Date().toISOString()
-    };
-    db.players.push(newPlayer);
-    await writeDb(db);
-    return newPlayer;
+    }
+    db.players.push(newPlayer)
+    await writeDb(db)
+    return newPlayer
   },
   
   async findById(id: number) {
     if (isProduction) {
-      const result = await pool!.query('SELECT * FROM players WHERE id = $1', [id]);
-      return result.rows[0] || null;
+      const result = await pool!.query('SELECT * FROM players WHERE id = $1', [id])
+      return result.rows[0] || null
     }
     
     if (isVercel) {
-      if (!memoryDb) await initDatabase();
-      return memoryDb.players.find((p: any) => p.id === id) || null;
+      if (!memoryDb) await initDatabase()
+      return memoryDb.players.find((p: any) => p.id === id) || null
     }
     
-    const db = await readDb();
-    return db.players.find((p: any) => p.id === id) || null;
+    const db = await readDb()
+    return db.players.find((p: any) => p.id === id) || null
   },
   
   async findByUsername(username: string) {
     if (isProduction) {
-      const result = await pool!.query('SELECT * FROM players WHERE username = $1', [username]);
-      return result.rows[0] || null;
+      const result = await pool!.query('SELECT * FROM players WHERE username = $1', [username])
+      return result.rows[0] || null
     }
     
     if (isVercel) {
-      if (!memoryDb) await initDatabase();
-      return memoryDb.players.find((p: any) => p.username === username) || null;
+      if (!memoryDb) await initDatabase()
+      return memoryDb.players.find((p: any) => p.username === username) || null
     }
     
-    const db = await readDb();
-    return db.players.find((p: any) => p.username === username) || null;
+    const db = await readDb()
+    return db.players.find((p: any) => p.username === username) || null
   },
   
-  async updateStats(id: number, won: number) {
-    if (isProduction) {
-      await pool!.query(
-        'UPDATE players SET games_played = games_played + 1, games_won = games_won + $1 WHERE id = $2',
-        [won, id]
-      );
-      return;
-    }
-    
-    if (isVercel) {
-      if (!memoryDb) await initDatabase();
-      const player = memoryDb.players.find((p: any) => p.id === id);
-      if (player) {
-        player.games_played += 1;
-        player.games_won += won;
-      }
-      return;
-    }
-    
-    const db = await readDb();
-    const player = db.players.find((p: any) => p.id === id);
-    if (player) {
-      player.games_played += 1;
-      player.games_won += won;
-      await writeDb(db);
-    }
-  },
-
   async deleteOldPlayers() {
     if (isProduction) {
       try {
@@ -254,22 +200,22 @@ export const players = {
     );
     await writeDb(db);
   }
-};
+}
 
-// Game room operations
 export const gameRooms = {
-  async create(roomCode: string, name: string, hostId: number, maxPlayers: number, roleConfig: any, doctorCanHealSameTwice: boolean) {
+  async create(name: string, hostId: number, maxPlayers: number, roleConfig: any, doctorCanHealSameTwice: boolean) {
+    const roomCode = Math.random().toString(36).substring(2, 8).toUpperCase()
+    
     if (isProduction) {
       const result = await pool!.query(
-        `INSERT INTO game_rooms (room_code, name, host_id, max_players, current_players, status, current_phase, day_number, role_config, doctor_can_heal_same_twice) 
-         VALUES ($1, $2, $3, $4, 1, 'waiting', 'lobby', 0, $5, $6) RETURNING *`,
-        [roomCode, name, hostId, maxPlayers, JSON.stringify(roleConfig), doctorCanHealSameTwice]
-      );
-      return result.rows[0];
+        'INSERT INTO game_rooms (room_code, name, host_id, max_players, current_players, status, current_phase, day_number, role_config, doctor_can_heal_same_twice, created_at) VALUES ($1, $2, $3, $4, 1, $5, $6, 1, $7, $8, NOW()) RETURNING *',
+        [roomCode, name, hostId, maxPlayers, 'waiting', 'lobby', JSON.stringify(roleConfig), doctorCanHealSameTwice]
+      )
+      return result.rows[0]
     }
     
     if (isVercel) {
-      if (!memoryDb) await initDatabase();
+      if (!memoryDb) await initDatabase()
       const newRoom = {
         id: Date.now(),
         room_code: roomCode,
@@ -279,17 +225,16 @@ export const gameRooms = {
         current_players: 1,
         status: 'waiting',
         current_phase: 'lobby',
-        day_number: 0,
-        winner: null,
+        day_number: 1,
         role_config: JSON.stringify(roleConfig),
         doctor_can_heal_same_twice: doctorCanHealSameTwice,
         created_at: new Date().toISOString()
-      };
-      memoryDb.game_rooms.push(newRoom);
-      return newRoom;
+      }
+      memoryDb.game_rooms.push(newRoom)
+      return newRoom
     }
     
-    const db = await readDb();
+    const db = await readDb()
     const newRoom = {
       id: Date.now(),
       room_code: roomCode,
@@ -299,83 +244,83 @@ export const gameRooms = {
       current_players: 1,
       status: 'waiting',
       current_phase: 'lobby',
-      day_number: 0,
-      winner: null,
+      day_number: 1,
       role_config: JSON.stringify(roleConfig),
       doctor_can_heal_same_twice: doctorCanHealSameTwice,
       created_at: new Date().toISOString()
-    };
-    db.game_rooms.push(newRoom);
-    await writeDb(db);
-    return newRoom;
+    }
+    db.game_rooms.push(newRoom)
+    await writeDb(db)
+    return newRoom
   },
   
   async findById(id: number) {
     if (isProduction) {
-      const result = await pool!.query('SELECT * FROM game_rooms WHERE id = $1', [id]);
-      return result.rows[0] || null;
+      const result = await pool!.query('SELECT * FROM game_rooms WHERE id = $1', [id])
+      return result.rows[0] || null
     }
     
     if (isVercel) {
-      if (!memoryDb) await initDatabase();
-      return memoryDb.game_rooms.find((r: any) => r.id === id) || null;
+      if (!memoryDb) await initDatabase()
+      return memoryDb.game_rooms.find((r: any) => r.id === id) || null
     }
     
-    const db = await readDb();
-    return db.game_rooms.find((r: any) => r.id === id) || null;
+    const db = await readDb()
+    return db.game_rooms.find((r: any) => r.id === id) || null
   },
   
-  async findByCode(roomCode: string) {
+  async findByRoomCode(roomCode: string) {
     if (isProduction) {
-      const result = await pool!.query('SELECT * FROM game_rooms WHERE room_code = $1 AND status = $2', [roomCode, 'waiting']);
-      return result.rows[0] || null;
+      const result = await pool!.query('SELECT * FROM game_rooms WHERE room_code = $1', [roomCode])
+      return result.rows[0] || null
     }
     
     if (isVercel) {
-      if (!memoryDb) await initDatabase();
-      return memoryDb.game_rooms.find((r: any) => r.room_code === roomCode && r.status === 'waiting') || null;
+      if (!memoryDb) await initDatabase()
+      return memoryDb.game_rooms.find((r: any) => r.room_code === roomCode) || null
     }
     
-    const db = await readDb();
-    return db.game_rooms.find((r: any) => r.room_code === roomCode && r.status === 'waiting') || null;
+    const db = await readDb()
+    return db.game_rooms.find((r: any) => r.room_code === roomCode) || null
   },
   
   async findAllWaiting() {
     if (isProduction) {
-      const result = await pool!.query(`
-        SELECT gr.*, 
-               COALESCE(participant_count.count, 0) as current_players
-        FROM game_rooms gr
-        LEFT JOIN (
-          SELECT game_id, COUNT(*) as count
-          FROM game_participants
-          GROUP BY game_id
-        ) participant_count ON gr.id = participant_count.game_id
-        WHERE gr.status = 'waiting'
-        ORDER BY gr.created_at DESC
-      `);
-      return result.rows;
+      const result = await pool!.query('SELECT * FROM game_rooms WHERE status = $1 ORDER BY created_at DESC', ['waiting'])
+      const rooms = result.rows
+      
+      // Now recalculate from actual participants
+      for (const room of rooms) {
+        const participantCount = await pool!.query('SELECT COUNT(*) FROM game_participants WHERE game_id = $1', [room.id])
+        room.current_players = parseInt(participantCount.rows[0].count)
+      }
+      
+      return rooms
     }
     
     if (isVercel) {
-      if (!memoryDb) await initDatabase();
-      const rooms = memoryDb.game_rooms.filter((r: any) => r.status === 'waiting');
-      // Recalculate current_players from actual participants
+      if (!memoryDb) await initDatabase()
+      const rooms = memoryDb.game_rooms.filter((r: any) => r.status === 'waiting')
+      
+      // Now recalculate from actual participants
       for (const room of rooms) {
-        const participantCount = memoryDb.game_participants.filter((p: any) => p.game_id === room.id).length;
-        room.current_players = participantCount;
+        const participantCount = memoryDb.game_participants.filter((p: any) => p.game_id === room.id).length
+        room.current_players = participantCount
       }
-      return rooms.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      
+      return rooms
     }
     
-    const db = await readDb();
-    const rooms = db.game_rooms.filter((r: any) => r.status === 'waiting');
-    // Recalculate current_players from actual participants
+    const db = await readDb()
+    const rooms = db.game_rooms.filter((r: any) => r.status === 'waiting')
+    
+    // Now recalculate from actual participants
     for (const room of rooms) {
-      const participantCount = db.game_participants.filter((p: any) => p.game_id === room.id).length;
-      room.current_players = participantCount;
+      const participantCount = db.game_participants.filter((p: any) => p.game_id === room.id).length
+      room.current_players = participantCount
     }
-    return rooms.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    
+    return rooms
   },
   
   async updateStatus(id: number, status: string, phase: string, dayNumber: number) {
@@ -383,118 +328,140 @@ export const gameRooms = {
       await pool!.query(
         'UPDATE game_rooms SET status = $1, current_phase = $2, day_number = $3 WHERE id = $4',
         [status, phase, dayNumber, id]
-      );
-      return;
+      )
+      return
     }
     
     if (isVercel) {
-      if (!memoryDb) await initDatabase();
-      const room = memoryDb.game_rooms.find((r: any) => r.id === id);
+      if (!memoryDb) await initDatabase()
+      const room = memoryDb.game_rooms.find((r: any) => r.id === id)
       if (room) {
-        room.status = status;
-        room.current_phase = phase;
-        room.day_number = dayNumber;
+        room.status = status
+        room.current_phase = phase
+        room.day_number = dayNumber
       }
-      return;
+      return
     }
     
-    const db = await readDb();
-    const room = db.game_rooms.find((r: any) => r.id === id);
+    const db = await readDb()
+    const room = db.game_rooms.find((r: any) => r.id === id)
     if (room) {
-      room.status = status;
-      room.current_phase = phase;
-      room.day_number = dayNumber;
-      await writeDb(db);
+      room.status = status
+      room.current_phase = phase
+      room.day_number = dayNumber
+      await writeDb(db)
     }
   },
   
   async updatePlayerCount(id: number, count: number) {
     if (isProduction) {
-      await pool!.query('UPDATE game_rooms SET current_players = $1 WHERE id = $2', [count, id]);
-      return;
+      await pool!.query('UPDATE game_rooms SET current_players = $1 WHERE id = $2', [count, id])
+      return
     }
     
     if (isVercel) {
-      if (!memoryDb) await initDatabase();
-      const room = memoryDb.game_rooms.find((r: any) => r.id === id);
+      if (!memoryDb) await initDatabase()
+      const room = memoryDb.game_rooms.find((r: any) => r.id === id)
       if (room) {
-        room.current_players = count;
+        room.current_players = count
       }
-      return;
+      return
     }
     
-    const db = await readDb();
-    const room = db.game_rooms.find((r: any) => r.id === id);
+    const db = await readDb()
+    const room = db.game_rooms.find((r: any) => r.id === id)
     if (room) {
-      room.current_players = count;
-      await writeDb(db);
+      room.current_players = count
+      await writeDb(db)
     }
   },
 
   async updateHost(id: number, newHostId: number) {
     if (isProduction) {
-      await pool!.query('UPDATE game_rooms SET host_id = $1 WHERE id = $2', [newHostId, id]);
-      return;
+      await pool!.query('UPDATE game_rooms SET host_id = $1 WHERE id = $2', [newHostId, id])
+      return
     }
     
     if (isVercel) {
-      if (!memoryDb) await initDatabase();
-      const room = memoryDb.game_rooms.find((r: any) => r.id === id);
+      if (!memoryDb) await initDatabase()
+      const room = memoryDb.game_rooms.find((r: any) => r.id === id)
       if (room) {
-        room.host_id = newHostId;
+        room.host_id = newHostId
       }
-      return;
+      return
     }
     
-    const db = await readDb();
-    const room = db.game_rooms.find((r: any) => r.id === id);
+    const db = await readDb()
+    const room = db.game_rooms.find((r: any) => r.id === id)
     if (room) {
-      room.host_id = newHostId;
-      await writeDb(db);
+      room.host_id = newHostId
+      await writeDb(db)
     }
   },
 
+  async updateWinner(id: number, winner: string) {
+    if (isProduction) {
+      await pool!.query('UPDATE game_rooms SET winner = $1 WHERE id = $2', [winner, id])
+      return
+    }
+    
+    if (isVercel) {
+      if (!memoryDb) await initDatabase()
+      const room = memoryDb.game_rooms.find((r: any) => r.id === id)
+      if (room) {
+        room.winner = winner
+      }
+      return
+    }
+    
+    const db = await readDb()
+    const room = db.game_rooms.find((r: any) => r.id === id)
+    if (room) {
+      room.winner = winner
+      await writeDb(db)
+    }
+  },
+  
   async delete(id: number) {
     if (isProduction) {
-      // Delete in order due to foreign key constraints
-      await pool!.query('DELETE FROM game_messages WHERE game_id = $1', [id]);
-      await pool!.query('DELETE FROM game_actions WHERE game_id = $1', [id]);
-      await pool!.query('DELETE FROM game_participants WHERE game_id = $1', [id]);
-      await pool!.query('DELETE FROM game_rooms WHERE id = $1', [id]);
-      return;
+      // Delete in order to respect foreign key constraints
+      await pool!.query('DELETE FROM game_messages WHERE game_id = $1', [id])
+      await pool!.query('DELETE FROM game_actions WHERE game_id = $1', [id])
+      await pool!.query('DELETE FROM game_participants WHERE game_id = $1', [id])
+      await pool!.query('DELETE FROM game_rooms WHERE id = $1', [id])
+      return
     }
     
     if (isVercel) {
-      if (!memoryDb) await initDatabase();
-      memoryDb.game_messages = memoryDb.game_messages.filter((m: any) => m.game_id !== id);
-      memoryDb.game_actions = memoryDb.game_actions.filter((a: any) => a.game_id !== id);
-      memoryDb.game_participants = memoryDb.game_participants.filter((p: any) => p.game_id !== id);
-      memoryDb.game_rooms = memoryDb.game_rooms.filter((r: any) => r.id !== id);
-      return;
+      if (!memoryDb) await initDatabase()
+      memoryDb.game_messages = memoryDb.game_messages.filter((m: any) => m.game_id !== id)
+      memoryDb.game_actions = memoryDb.game_actions.filter((a: any) => a.game_id !== id)
+      memoryDb.game_participants = memoryDb.game_participants.filter((p: any) => p.game_id !== id)
+      memoryDb.game_rooms = memoryDb.game_rooms.filter((r: any) => r.id !== id)
+      return
     }
     
-    const db = await readDb();
-    db.game_messages = db.game_messages.filter((m: any) => m.game_id !== id);
-    db.game_actions = db.game_actions.filter((a: any) => a.game_id !== id);
-    db.game_participants = db.game_participants.filter((p: any) => p.game_id !== id);
-    db.game_rooms = db.game_rooms.filter((r: any) => r.id !== id);
-    await writeDb(db);
+    const db = await readDb()
+    db.game_messages = db.game_messages.filter((m: any) => m.game_id !== id)
+    db.game_actions = db.game_actions.filter((a: any) => a.game_id !== id)
+    db.game_participants = db.game_participants.filter((p: any) => p.game_id !== id)
+    db.game_rooms = db.game_rooms.filter((r: any) => r.id !== id)
+    await writeDb(db)
   }
-};
+}
 
-// Game participants operations
 export const gameParticipants = {
-  async create(gameId: number, playerId: number, role: string, isHost: boolean) {
+  async create(gameId: number, playerId: number, isHost: boolean, role: string = 'villager') {
     if (isProduction) {
       const result = await pool!.query(
-        'INSERT INTO game_participants (game_id, player_id, role, is_alive, is_host) VALUES ($1, $2, $3, true, $4) RETURNING *',
-        [gameId, playerId, role, isHost]
-      );
-      return result.rows[0];
+        'INSERT INTO game_participants (game_id, player_id, role, is_alive, is_host, created_at) VALUES ($1, $2, $3, $4, $5, NOW()) RETURNING *',
+        [gameId, playerId, role, true, isHost]
+      )
+      return result.rows[0]
     }
     
     if (isVercel) {
-      if (!memoryDb) await initDatabase();
+      if (!memoryDb) await initDatabase()
       const newParticipant = {
         id: Date.now(),
         game_id: gameId,
@@ -502,14 +469,13 @@ export const gameParticipants = {
         role,
         is_alive: true,
         is_host: isHost,
-        last_healed_player_id: null,
-        joined_at: new Date().toISOString()
-      };
-      memoryDb.game_participants.push(newParticipant);
-      return newParticipant;
+        created_at: new Date().toISOString()
+      }
+      memoryDb.game_participants.push(newParticipant)
+      return newParticipant
     }
     
-    const db = await readDb();
+    const db = await readDb()
     const newParticipant = {
       id: Date.now(),
       game_id: gameId,
@@ -517,12 +483,11 @@ export const gameParticipants = {
       role,
       is_alive: true,
       is_host: isHost,
-      last_healed_player_id: null,
-      joined_at: new Date().toISOString()
-    };
-    db.game_participants.push(newParticipant);
-    await writeDb(db);
-    return newParticipant;
+      created_at: new Date().toISOString()
+    }
+    db.game_participants.push(newParticipant)
+    await writeDb(db)
+    return newParticipant
   },
   
   async findByGame(gameId: number) {
@@ -534,86 +499,67 @@ export const gameParticipants = {
          WHERE gp.game_id = $1 
          ORDER BY gp.id ASC`,
         [gameId]
-      );
-      return result.rows;
+      )
+      return result.rows
     }
     
     if (isVercel) {
-      if (!memoryDb) await initDatabase();
-      const participants = memoryDb.game_participants.filter((p: any) => p.game_id === gameId);
-      const players = memoryDb.players;
-      return participants.map((p: any) => ({
-        ...p,
-        username: players.find((pl: any) => pl.id === p.player_id)?.username || 'Unknown'
-      })).sort((a: any, b: any) => new Date(a.joined_at).getTime() - new Date(b.joined_at).getTime());
+      if (!memoryDb) await initDatabase()
+      return memoryDb.game_participants
+        .filter((p: any) => p.game_id === gameId)
+        .map((p: any) => {
+          const player = memoryDb.players.find((pl: any) => pl.id === p.player_id)
+          return { ...p, username: player?.username || 'Unknown' }
+        })
     }
     
-    const db = await readDb();
-    const participants = db.game_participants.filter((p: any) => p.game_id === gameId);
-    const players = db.players;
-    return participants.map((p: any) => ({
-      ...p,
-      username: players.find((pl: any) => pl.id === p.player_id)?.username || 'Unknown'
-    })).sort((a: any, b: any) => new Date(a.joined_at).getTime() - new Date(b.joined_at).getTime());
+    const db = await readDb()
+    return db.game_participants
+      .filter((p: any) => p.game_id === gameId)
+      .map((p: any) => {
+        const player = db.players.find((pl: any) => pl.id === p.player_id)
+        return { ...p, username: player?.username || 'Unknown' }
+      })
   },
   
   async findByGameAndPlayer(gameId: number, playerId: number) {
     if (isProduction) {
       const result = await pool!.query(
-        `SELECT gp.*, p.username 
-         FROM game_participants gp 
-         JOIN players p ON gp.player_id = p.id 
-         WHERE gp.game_id = $1 AND gp.player_id = $2`,
+        'SELECT * FROM game_participants WHERE game_id = $1 AND player_id = $2',
         [gameId, playerId]
-      );
-      return result.rows[0] || null;
+      )
+      return result.rows[0] || null
     }
     
     if (isVercel) {
-      if (!memoryDb) await initDatabase();
-      const participant = memoryDb.game_participants.find((p: any) => p.game_id === gameId && p.player_id === playerId);
-      if (participant) {
-        const player = memoryDb.players.find((pl: any) => pl.id === participant.player_id);
-        return {
-          ...participant,
-          username: player?.username || 'Unknown'
-        };
-      }
-      return null;
+      if (!memoryDb) await initDatabase()
+      return memoryDb.game_participants.find((p: any) => p.game_id === gameId && p.player_id === playerId) || null
     }
     
-    const db = await readDb();
-    const participant = db.game_participants.find((p: any) => p.game_id === gameId && p.player_id === playerId);
-    if (participant) {
-      const player = db.players.find((pl: any) => pl.id === participant.player_id);
-      return {
-        ...participant,
-        username: player?.username || 'Unknown'
-      };
-    }
-    return null;
+    const db = await readDb()
+    return db.game_participants.find((p: any) => p.game_id === gameId && p.player_id === playerId) || null
   },
   
   async updateRole(id: number, role: string) {
     if (isProduction) {
-      await pool!.query('UPDATE game_participants SET role = $1 WHERE id = $2', [role, id]);
-      return;
+      await pool!.query('UPDATE game_participants SET role = $1 WHERE id = $2', [role, id])
+      return
     }
     
     if (isVercel) {
-      if (!memoryDb) await initDatabase();
-      const participant = memoryDb.game_participants.find((p: any) => p.id === id);
+      if (!memoryDb) await initDatabase()
+      const participant = memoryDb.game_participants.find((p: any) => p.id === id)
       if (participant) {
-        participant.role = role;
+        participant.role = role
       }
-      return;
+      return
     }
     
-    const db = await readDb();
-    const participant = db.game_participants.find((p: any) => p.id === id);
+    const db = await readDb()
+    const participant = db.game_participants.find((p: any) => p.id === id)
     if (participant) {
-      participant.role = role;
-      await writeDb(db);
+      participant.role = role
+      await writeDb(db)
     }
   },
   
@@ -622,117 +568,90 @@ export const gameParticipants = {
       await pool!.query(
         'UPDATE game_participants SET is_alive = $1 WHERE game_id = $2 AND player_id = $3',
         [isAlive, gameId, playerId]
-      );
-      return;
+      )
+      return
     }
     
     if (isVercel) {
-      if (!memoryDb) await initDatabase();
-      const participant = memoryDb.game_participants.find((p: any) => p.game_id === gameId && p.player_id === playerId);
+      if (!memoryDb) await initDatabase()
+      const participant = memoryDb.game_participants.find((p: any) => p.game_id === gameId && p.player_id === playerId)
       if (participant) {
-        participant.is_alive = isAlive;
+        participant.is_alive = isAlive
       }
-      return;
+      return
     }
     
-    const db = await readDb();
-    const participant = db.game_participants.find((p: any) => p.game_id === gameId && p.player_id === playerId);
+    const db = await readDb()
+    const participant = db.game_participants.find((p: any) => p.game_id === gameId && p.player_id === playerId)
     if (participant) {
-      participant.is_alive = isAlive;
-      await writeDb(db);
+      participant.is_alive = isAlive
+      await writeDb(db)
     }
   },
   
-  async updateLastHealed(gameId: number, playerId: number, lastHealedPlayerId: number) {
+  async updateLastHealed(gameId: number, playerId: number, targetId: number) {
     if (isProduction) {
       await pool!.query(
         'UPDATE game_participants SET last_healed_player_id = $1 WHERE game_id = $2 AND player_id = $3',
-        [lastHealedPlayerId, gameId, playerId]
-      );
-      return;
+        [targetId, gameId, playerId]
+      )
+      return
     }
     
     if (isVercel) {
-      if (!memoryDb) await initDatabase();
-      const participant = memoryDb.game_participants.find((p: any) => p.game_id === gameId && p.player_id === playerId);
+      if (!memoryDb) await initDatabase()
+      const participant = memoryDb.game_participants.find((p: any) => p.game_id === gameId && p.player_id === playerId)
       if (participant) {
-        participant.last_healed_player_id = lastHealedPlayerId;
+        participant.last_healed_player_id = targetId
       }
-      return;
+      return
     }
     
-    const db = await readDb();
-    const participant = db.game_participants.find((p: any) => p.game_id === gameId && p.player_id === playerId);
+    const db = await readDb()
+    const participant = db.game_participants.find((p: any) => p.game_id === gameId && p.player_id === playerId)
     if (participant) {
-      participant.last_healed_player_id = lastHealedPlayerId;
-      await writeDb(db);
+      participant.last_healed_player_id = targetId
+      await writeDb(db)
     }
   },
-
+  
   async remove(gameId: number, playerId: number) {
     if (isProduction) {
       await pool!.query(
         'DELETE FROM game_participants WHERE game_id = $1 AND player_id = $2',
         [gameId, playerId]
-      );
-      return;
+      )
+      return
     }
     
     if (isVercel) {
-      if (!memoryDb) await initDatabase();
+      if (!memoryDb) await initDatabase()
       memoryDb.game_participants = memoryDb.game_participants.filter(
         (p: any) => !(p.game_id === gameId && p.player_id === playerId)
-      );
-      return;
+      )
+      return
     }
     
-    const db = await readDb();
+    const db = await readDb()
     db.game_participants = db.game_participants.filter(
       (p: any) => !(p.game_id === gameId && p.player_id === playerId)
-    );
-    await writeDb(db);
-  },
-
-  async updateHost(gameId: number, playerId: number, isHost: boolean) {
-    if (isProduction) {
-      await pool!.query(
-        'UPDATE game_participants SET is_host = $1 WHERE game_id = $2 AND player_id = $3',
-        [isHost, gameId, playerId]
-      );
-      return;
-    }
-    
-    if (isVercel) {
-      if (!memoryDb) await initDatabase();
-      const participant = memoryDb.game_participants.find((p: any) => p.game_id === gameId && p.player_id === playerId);
-      if (participant) {
-        participant.is_host = isHost;
-      }
-      return;
-    }
-    
-    const db = await readDb();
-    const participant = db.game_participants.find((p: any) => p.game_id === gameId && p.player_id === playerId);
-    if (participant) {
-      participant.is_host = isHost;
-      await writeDb(db);
-    }
+    )
+    await writeDb(db)
   }
-};
+}
 
-// Game actions operations
 export const gameActions = {
   async create(gameId: number, playerId: number, actionType: string, targetId: number, phase: string, dayNumber: number) {
     if (isProduction) {
       const result = await pool!.query(
-        'INSERT INTO game_actions (game_id, player_id, action_type, target_id, day_number) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-        [gameId, playerId, actionType, targetId, dayNumber]
-      );
-      return result.rows[0];
+        'INSERT INTO game_actions (game_id, player_id, action_type, target_id, phase, day_number, created_at) VALUES ($1, $2, $3, $4, $5, $6, NOW()) RETURNING *',
+        [gameId, playerId, actionType, targetId, phase, dayNumber]
+      )
+      return result.rows[0]
     }
     
     if (isVercel) {
-      if (!memoryDb) await initDatabase();
+      if (!memoryDb) await initDatabase()
       const newAction = {
         id: Date.now(),
         game_id: gameId,
@@ -742,12 +661,12 @@ export const gameActions = {
         phase,
         day_number: dayNumber,
         created_at: new Date().toISOString()
-      };
-      memoryDb.game_actions.push(newAction);
-      return newAction;
+      }
+      memoryDb.game_actions.push(newAction)
+      return newAction
     }
     
-    const db = await readDb();
+    const db = await readDb()
     const newAction = {
       id: Date.now(),
       game_id: gameId,
@@ -757,28 +676,32 @@ export const gameActions = {
       phase,
       day_number: dayNumber,
       created_at: new Date().toISOString()
-    };
-    db.game_actions.push(newAction);
-    await writeDb(db);
-    return newAction;
+    }
+    db.game_actions.push(newAction)
+    await writeDb(db)
+    return newAction
   },
   
   async findByGameAndPhase(gameId: number, phase: string, dayNumber: number) {
     if (isProduction) {
       const result = await pool!.query(
-        'SELECT * FROM game_actions WHERE game_id = $1 AND day_number = $2 ORDER BY created_at ASC',
-        [gameId, dayNumber]
-      );
-      return result.rows;
+        'SELECT * FROM game_actions WHERE game_id = $1 AND phase = $2 AND day_number = $3',
+        [gameId, phase, dayNumber]
+      )
+      return result.rows
     }
     
     if (isVercel) {
-      if (!memoryDb) await initDatabase();
-      return memoryDb.game_actions.filter((a: any) => a.game_id === gameId && a.day_number === dayNumber);
+      if (!memoryDb) await initDatabase()
+      return memoryDb.game_actions.filter((a: any) => 
+        a.game_id === gameId && a.phase === phase && a.day_number === dayNumber
+      )
     }
     
-    const db = await readDb();
-    return db.game_actions.filter((a: any) => a.game_id === gameId && a.day_number === dayNumber);
+    const db = await readDb()
+    return db.game_actions.filter((a: any) => 
+      a.game_id === gameId && a.phase === phase && a.day_number === dayNumber
+    )
   },
   
   async clearByGameAndPhase(gameId: number, dayNumber: number) {
@@ -786,40 +709,50 @@ export const gameActions = {
       await pool!.query(
         'DELETE FROM game_actions WHERE game_id = $1 AND day_number = $2',
         [gameId, dayNumber]
-      );
-      return;
+      )
+      return
     }
     
     if (isVercel) {
-      if (!memoryDb) await initDatabase();
-      memoryDb.game_actions = memoryDb.game_actions.filter(
-        (a: any) => !(a.game_id === gameId && a.day_number === dayNumber)
-      );
-      return;
+      if (!memoryDb) await initDatabase()
+      memoryDb.game_actions = memoryDb.game_actions.filter((a: any) => 
+        !(a.game_id === gameId && a.day_number === dayNumber)
+      )
+      return
     }
     
-    const db = await readDb();
-    db.game_actions = db.game_actions.filter(
-      (a: any) => !(a.game_id === gameId && a.day_number === dayNumber)
-    );
-    await writeDb(db);
+    const db = await readDb()
+    db.game_actions = db.game_actions.filter((a: any) => 
+      !(a.game_id === gameId && a.day_number === dayNumber)
+    )
+    await writeDb(db)
   }
-};
+}
 
-// Game messages operations
 export const gameMessages = {
   async create(gameId: number, playerId: number | null, message: string, messageType: string, visibleToPlayerId: number | null, isSystem: boolean) {
     if (isProduction) {
-      // Remove is_system column since it doesn't exist in the database
-      const result = await pool!.query(
-        'INSERT INTO game_messages (game_id, player_id, message, message_type, created_at) VALUES ($1, $2, $3, $4, NOW()) RETURNING *',
-        [gameId, playerId, message, messageType]
-      );
-      return result.rows[0];
+      // For PostgreSQL, we need to handle the visible_to_player_id properly
+      // Since the column might not exist, we'll store it in the message itself for private messages
+      if (messageType === 'private' && visibleToPlayerId) {
+        // For private messages, we'll add a marker to the message
+        const privateMessage = `[PRIVATE_TO_${visibleToPlayerId}]${message}`
+        const result = await pool!.query(
+          'INSERT INTO game_messages (game_id, player_id, message, message_type, created_at) VALUES ($1, $2, $3, $4, NOW()) RETURNING *',
+          [gameId, playerId, privateMessage, messageType]
+        )
+        return result.rows[0]
+      } else {
+        const result = await pool!.query(
+          'INSERT INTO game_messages (game_id, player_id, message, message_type, created_at) VALUES ($1, $2, $3, $4, NOW()) RETURNING *',
+          [gameId, playerId, message, messageType]
+        )
+        return result.rows[0]
+      }
     }
     
     if (isVercel) {
-      if (!memoryDb) await initDatabase();
+      if (!memoryDb) await initDatabase()
       const newMessage = {
         id: Date.now(),
         game_id: gameId,
@@ -829,12 +762,12 @@ export const gameMessages = {
         visible_to_player_id: visibleToPlayerId,
         is_system: isSystem,
         created_at: new Date().toISOString()
-      };
-      memoryDb.game_messages.push(newMessage);
-      return newMessage;
+      }
+      memoryDb.game_messages.push(newMessage)
+      return newMessage
     }
     
-    const db = await readDb();
+    const db = await readDb()
     const newMessage = {
       id: Date.now(),
       game_id: gameId,
@@ -844,10 +777,10 @@ export const gameMessages = {
       visible_to_player_id: visibleToPlayerId,
       is_system: isSystem,
       created_at: new Date().toISOString()
-    };
-    db.game_messages.push(newMessage);
-    await writeDb(db);
-    return newMessage;
+    }
+    db.game_messages.push(newMessage)
+    await writeDb(db)
+    return newMessage
   },
   
   async findByGame(gameId: number, playerId: number) {
@@ -859,47 +792,51 @@ export const gameMessages = {
          WHERE gm.game_id = $1 
          ORDER BY gm.created_at ASC`,
         [gameId]
-      );
-      return result.rows;
+      )
+      
+      // Filter messages based on visibility for PostgreSQL
+      const filteredMessages = result.rows.filter((msg: any) => {
+        if (msg.message_type === 'private') {
+          // Check if this is a private message for the current player
+          const privateMatch = msg.message.match(/^\[PRIVATE_TO_(\d+)\](.*)$/)
+          if (privateMatch) {
+            const targetPlayerId = parseInt(privateMatch[1])
+            const actualMessage = privateMatch[2]
+            if (targetPlayerId === playerId) {
+              // This message is for the current player, show it
+              msg.message = actualMessage
+              return true
+            } else {
+              // This message is for someone else, hide it
+              return false
+            }
+          }
+        }
+        // Show all non-private messages
+        return true
+      })
+      
+      return filteredMessages
     }
     
     if (isVercel) {
-      if (!memoryDb) await initDatabase();
-      const messages = memoryDb.game_messages.filter((m: any) => 
-        m.game_id === gameId && 
-        (m.visible_to_player_id === null || m.visible_to_player_id === playerId)
-      );
-      const players = memoryDb.players;
-      return messages.map((m: any) => ({
-        ...m,
-        username: m.player_id ? players.find((p: any) => p.id === m.player_id)?.username || 'Unknown' : null
-      })).sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+      if (!memoryDb) await initDatabase()
+      const messages = memoryDb.game_messages.filter((m: any) => m.game_id === gameId)
+      return messages.map((m: any) => {
+        const player = memoryDb.players.find((p: any) => p.id === m.player_id)
+        return { ...m, username: player?.username || null }
+      }).filter((m: any) => 
+        !m.visible_to_player_id || m.visible_to_player_id === playerId
+      )
     }
     
-    const db = await readDb();
-    const messages = db.game_messages.filter((m: any) => 
-      m.game_id === gameId && 
-      (m.visible_to_player_id === null || m.visible_to_player_id === playerId)
-    );
-    const players = db.players;
-    return messages.map((m: any) => ({
-      ...m,
-      username: m.player_id ? players.find((p: any) => p.id === m.player_id)?.username || 'Unknown' : null
-    })).sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    const db = await readDb()
+    const messages = db.game_messages.filter((m: any) => m.game_id === gameId)
+    return messages.map((m: any) => {
+      const player = db.players.find((p: any) => p.id === m.player_id)
+      return { ...m, username: player?.username || null }
+    }).filter((m: any) => 
+      !m.visible_to_player_id || m.visible_to_player_id === playerId
+    )
   }
-};
-
-// Initialize database on module load
-initDatabase();
-
-// Auto cleanup function - runs every hour
-setInterval(async () => {
-  try {
-    await players.deleteOldPlayers();
-    console.log('Cleaned up old players');
-  } catch (error) {
-    console.error('Error during cleanup:', error);
-  }
-}, 60 * 60 * 1000); // 1 hour
-
-export { initDatabase };
+}

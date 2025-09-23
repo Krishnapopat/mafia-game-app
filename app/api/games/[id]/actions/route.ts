@@ -45,7 +45,7 @@ export async function POST(
     // Create action
     await gameActions.create(gameId, player_id, action_type, target_id, game.current_phase, game.day_number)
 
-    // Handle immediate detective results - PRIVATE MESSAGE ONLY
+    // Handle immediate detective results - TRULY PRIVATE MESSAGE
     if (action_type === 'investigate' && (player.role === 'detective' || player.role === 'fake_detective')) {
       const participants = await gameParticipants.findByGame(gameId)
       const targetPlayer = participants.find(p => p.player_id === target_id)
@@ -61,11 +61,11 @@ export async function POST(
           result = Math.random() < 0.5 ? 'guilty' : 'innocent'
         }
         
-        // Send PRIVATE message only to the detective
+        // Send TRULY PRIVATE message only to the detective (no [PRIVATE] text)
         await gameMessages.create(
           gameId, 
           null, 
-          `[PRIVATE] Investigation result: ${targetPlayer.username} is ${result}.`, 
+          `Investigation result: ${targetPlayer.username} is ${result}.`, 
           'private', 
           player_id, 
           false

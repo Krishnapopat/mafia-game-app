@@ -34,11 +34,12 @@ export async function POST(
       return NextResponse.json({ message: 'Dead players cannot vote' }, { status: 400 })
     }
 
+    // ALL ALIVE PLAYERS CAN VOTE - NO ROLE RESTRICTIONS
     // Create vote action
     await gameActions.create(gameId, player_id, 'vote', target_id, 'day', game.day_number)
 
-    // Add confirmation message
-    await gameMessages.create(gameId, player_id, `You have voted to eliminate someone.`, 'private', player_id, false)
+    // Add confirmation message (private)
+    await gameMessages.create(gameId, null, `You have voted to eliminate someone.`, 'private', player_id, false)
 
     // Check if all alive players have voted
     await checkAndProcessVotes(gameId, game)
@@ -57,82 +58,91 @@ async function checkAndProcessVotes(gameId: number, game: any) {
     const aliveParticipants = participants.filter(p => p.is_alive)
     
     // Get all votes for this day
-    const votes = await gameActions.findByGameAndPhase(gameId, 'day', game.day_number)
+    const dayVotes = await gameActions.findByGameAndPhase(gameId, 'day', game.day_number)
+    const voteActions = dayVotes.filter(action => action.action_type === 'vote')
+    
+    // Count unique voters
+    const uniqueVoters = [...new Set(voteActions.map(vote => vote.player_id))]
     
     // Check if all alive players have voted
-    if (votes.length >= aliveParticipants.length) {
-      await processVotes(gameId, game, votes)
+    if (uniqueVoters.length >= aliveParticipants.length) {
+      await processVotes(gameId, game)
     }
   } catch (error) {
     console.error('Error checking votes:', error)
   }
 }
 
-async function processVotes(gameId: number, game: any, votes: any[]) {
+async function processVotes(gameId: number, game: any) {
   try {
+    const participants = await gameParticipants.findByGame(gameId)
+    const aliveParticipants = participants.filter(p => p.is_alive)
+    
+    // Get all votes for this day
+    const dayVotes = await gameActions.findByGameAndPhase(gameId, 'day', game.day_number)
+    const voteActions = dayVotes.filter(action => action.action_type === 'vote')
+    
     // Count votes for each player
     const voteCounts: { [key: number]: number } = {}
-    votes.forEach(vote => {
+    voteActions.forEach(vote => {
       voteCounts[vote.target_id] = (voteCounts[vote.target_id] || 0) + 1
     })
-
+    
     // Find player with most votes
     let maxVotes = 0
-    let eliminatedPlayerId = null
+    let eliminatedPlayer = null
     
     Object.entries(voteCounts).forEach(([playerId, count]) => {
       if (count > maxVotes) {
         maxVotes = count
-        eliminatedPlayerId = parseInt(playerId)
+        eliminatedPlayer = participants.find(p => p.player_id === parseInt(playerId))
       }
     })
-
-    if (eliminatedPlayerId) {
-      const participants = await gameParticipants.findByGame(gameId)
-      const eliminatedPlayer = participants.find(p => p.player_id === eliminatedPlayerId)
-      
-      if (eliminatedPlayer) {
-        await gameParticipants.updateAlive(gameId, eliminatedPlayerId, false)
-        
-        // Check if Jester was eliminated
-        if (eliminatedPlayer.role === 'jester') {
-          await gameRooms.updateStatus(gameId, 'finished', 'finished', game.day_number)
-          await gameMessages.create(
-            gameId, 
-            null, 
-            `${eliminatedPlayer.username} was eliminated! The Jester wins!`, 
-            'death', 
-            null, 
-            false
-          )
-          return
-        }
-        
-        await gameMessages.create(
-          gameId, 
-          null, 
-          `${eliminatedPlayer.username} was eliminated by vote!`, 
-          'death', 
-          null, 
-          false
-        )
-      }
+    
+    // Check for ties
+    const tiedPlayers = Object.entries(voteCounts)
+      .filter(([_, count]) => count === maxVotes)
+      .map(([playerId, _]) => participants.find(p => p.player_id === parseInt(playerId)))
+    
+    if (tiedPlayers.length > 1) {
+      // Tie - no one is eliminated
+      await gameMessages.create(
+        gameId, 
+        null, 
+        `Vote resulted in a tie. No one is eliminated.`, 
+        'system', 
+        null, 
+        false
+      )
+    } else if (eliminatedPlayer) {
+      // Eliminate the player with most votes
+      await gameParticipants.updateAlive(gameId, eliminatedPlayer.player_id, false)
+      await gameMessages.create(
+        gameId, 
+        null, 
+        `${eliminatedPlayer.username} has been eliminated by vote!`, 
+        'death', 
+        null, 
+        false
+      )
     }
-
+    
     // Clear day votes
     await gameActions.clearByGameAndPhase(gameId, game.day_number)
     
     // Check win conditions
-    const participants = await gameParticipants.findByGame(gameId)
-    const aliveParticipants = participants.filter(p => p.is_alive)
-    const aliveMafia = aliveParticipants.filter(p => p.role === 'mafia')
-    const aliveVillagers = aliveParticipants.filter(p => ['villager', 'doctor', 'detective', 'fake_detective'].includes(p.role))
+    const newAliveParticipants = participants.filter(p => p.is_alive)
+    const aliveMafia = newAliveParticipants.filter(p => p.role === 'mafia')
+    const aliveVillagers = newAliveParticipants.filter(p => ['villager', 'doctor', 'detective', 'fake_detective'].includes(p.role))
+    const aliveJester = newAliveParticipants.filter(p => p.role === 'jester')
     
     let winner = null
     if (aliveMafia.length === 0) {
       winner = 'Villagers'
     } else if (aliveMafia.length >= aliveVillagers.length) {
       winner = 'Mafia'
+    } else if (aliveJester.length > 0 && eliminatedPlayer && eliminatedPlayer.role === 'jester') {
+      winner = 'Jester'
     }
     
     if (winner) {
@@ -152,7 +162,7 @@ async function processVotes(gameId: number, game: any, votes: any[]) {
       await gameMessages.create(
         gameId, 
         null, 
-        `Night ${nextDay} begins.`, 
+        `Night ${nextDay} begins. Mafia, Doctor, and Detectives, choose your actions.`, 
         'system', 
         null, 
         false

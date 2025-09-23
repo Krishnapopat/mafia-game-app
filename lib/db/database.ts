@@ -487,7 +487,7 @@ export const gameParticipants = {
   async create(gameId: number, playerId: number, role: string, isHost: boolean) {
     if (isProduction) {
       const result = await pool!.query(
-        'INSERT INTO game_participants (game_id, player_id, role, is_alive, is_host, joined_at) VALUES ($1, $2, $3, true, $4, NOW()) RETURNING *',
+        'INSERT INTO game_participants (game_id, player_id, role, is_alive, is_host) VALUES ($1, $2, $3, true, $4) RETURNING *',
         [gameId, playerId, role, isHost]
       );
       return result.rows[0];
@@ -532,7 +532,7 @@ export const gameParticipants = {
          FROM game_participants gp 
          JOIN players p ON gp.player_id = p.id 
          WHERE gp.game_id = $1 
-         ORDER BY gp.joined_at ASC`,
+         ORDER BY gp.id ASC`,
         [gameId]
       );
       return result.rows;

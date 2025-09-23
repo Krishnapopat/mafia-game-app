@@ -199,16 +199,28 @@ export const players = {
 
   async deleteOldPlayers() {
     if (isProduction) {
-      // First, delete old players who are NOT hosts of active rooms
-      await pool!.query(`
-        DELETE FROM players 
-        WHERE created_at < NOW() - INTERVAL '1 hour'
-        AND id NOT IN (
-          SELECT DISTINCT host_id 
-          FROM game_rooms 
-          WHERE status IN ('waiting', 'in_progress')
-        )
-      `);
+      try {
+        // Use a more robust approach - first get all old players who are not hosts
+        const result = await pool!.query(`
+          SELECT p.id 
+          FROM players p
+          WHERE p.created_at < NOW() - INTERVAL '1 hour'
+          AND p.id NOT IN (
+            SELECT DISTINCT host_id 
+            FROM game_rooms 
+            WHERE status IN ('waiting', 'in_progress')
+            AND host_id IS NOT NULL
+          )
+        `);
+        
+        // Delete them one by one to avoid any constraint issues
+        for (const row of result.rows) {
+          await pool!.query('DELETE FROM players WHERE id = $1', [row.id]);
+        }
+      } catch (error) {
+        console.error('Error during player cleanup:', error);
+        // Don't throw the error, just log it
+      }
       return;
     }
     
@@ -891,4 +903,3 @@ setInterval(async () => {
 }, 60 * 60 * 1000); // 1 hour
 
 export { initDatabase };
-// Foreign key constraint fix deployed

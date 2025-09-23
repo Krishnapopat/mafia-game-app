@@ -9,8 +9,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: 'Username must be at least 3 characters' }, { status: 400 })
     }
 
-    // Clean up old players first
-    await players.deleteOldPlayers()
+    // Temporarily disable cleanup to prevent foreign key constraint errors
+    // await players.deleteOldPlayers()
 
     // Check if username already exists
     const existingPlayer = await players.findByUsername(username.trim())

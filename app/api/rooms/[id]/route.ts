@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { gameRooms } from '@/lib/db/database'
+import { gameRooms, gameParticipants, gameMessages } from '@/lib/db/database'
 
 export async function DELETE(
   request: NextRequest,
@@ -17,6 +17,21 @@ export async function DELETE(
     
     if (!room) {
       return NextResponse.json({ message: 'Room not found' }, { status: 404 })
+    }
+
+    // Get all participants before deleting
+    const participants = await gameParticipants.findByGame(roomId)
+    
+    // Add room deletion message for all participants
+    for (const participant of participants) {
+      await gameMessages.create(
+        roomId, 
+        null, 
+        `Room "${room.name}" has been deleted by the host!`, 
+        'system', 
+        null, 
+        true
+      )
     }
 
     // Delete the room and all related data

@@ -20,6 +20,7 @@ import {
   Vote,
   EyeOff,
   LogOut,
+  AlertCircle,
 } from "lucide-react"
 import { useRouter } from "next/navigation"
 
@@ -95,6 +96,7 @@ export function GameRoom({ gameId }: GameRoomProps) {
   const [selectedTarget, setSelectedTarget] = useState<number | null>(null)
   const [hasActed, setHasActed] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [roomDeleted, setRoomDeleted] = useState(false)
   const router = useRouter()
 
   useEffect(() => {
@@ -114,6 +116,10 @@ export function GameRoom({ gameId }: GameRoomProps) {
       if (roomRes.ok) {
         const room = await roomRes.json()
         setGameRoom(room)
+      } else if (roomRes.status === 404) {
+        // Room not found - might be deleted
+        setRoomDeleted(true)
+        return
       }
 
       if (participantsRes.ok) {
@@ -132,6 +138,14 @@ export function GameRoom({ gameId }: GameRoomProps) {
       if (messagesRes.ok) {
         const messagesData = await messagesRes.json()
         setMessages(messagesData)
+        
+        // Check for room deletion message
+        const deletionMessage = messagesData.find((msg: GameMessage) => 
+          msg.message.includes('has been deleted by the host')
+        )
+        if (deletionMessage) {
+          setRoomDeleted(true)
+        }
       }
     } catch (error) {
       console.error('Error fetching game data:', error)
@@ -282,6 +296,30 @@ export function GameRoom({ gameId }: GameRoomProps) {
   const availableTargets = getAvailableTargets()
   const canAct = currentPlayer?.is_alive && !hasActed && availableTargets.length > 0
 
+  // Show room deleted message
+  if (roomDeleted) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
+        <div className="absolute inset-0 bg-[url('/placeholder-raawb.png')] opacity-5"></div>
+        <div className="relative z-10 text-center">
+          <div className="w-32 h-32 bg-red-900/30 rounded-full flex items-center justify-center mb-6 mx-auto">
+            <AlertCircle className="w-16 h-16 text-red-400" />
+          </div>
+          <h1 className="text-3xl font-bold text-white mb-4">Room Deleted</h1>
+          <p className="text-slate-300 text-lg mb-6">
+            The room has been deleted by the host.
+          </p>
+          <Button 
+            onClick={() => router.push("/")} 
+            className="bg-purple-600 hover:bg-purple-700 text-white"
+          >
+            Return to Lobby
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
   if (!gameRoom || !currentPlayer) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
@@ -345,7 +383,8 @@ export function GameRoom({ gameId }: GameRoomProps) {
         </div>
 
         {error && (
-          <div className="mb-4 p-3 bg-red-900/30 border border-red-600 rounded-lg">
+          <div className="mb-4 p-3 bg-red-900/30 border border-red-600 rounded-lg flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-red-400" />
             <p className="text-red-200 text-sm">{error}</p>
           </div>
         )}

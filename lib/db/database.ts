@@ -57,52 +57,42 @@ async function initDatabase() {
     return;
   }
   
-  // For local development, use file system
   await ensureDbDir();
   
   try {
     await fs.access(dbFile);
   } catch {
     // Create initial database structure
-    const initialData = {
+    const initialDb = {
       players: [],
       game_rooms: [],
       game_participants: [],
       game_actions: [],
       game_messages: []
     };
-    await fs.writeFile(dbFile, JSON.stringify(initialData, null, 2));
+    await fs.writeFile(dbFile, JSON.stringify(initialDb, null, 2));
   }
 }
 
-// Read database (file-based)
+// Read database
 async function readDb() {
-  if (isProduction || isVercel) {
-    throw new Error('readDb should not be called in production/Vercel');
-  }
+  if (isProduction || isVercel) return memoryDb;
   
-  await ensureDbDir();
-  try {
-    const data = await fs.readFile(dbFile, 'utf-8');
-    return JSON.parse(data);
-  } catch {
-    await initDatabase();
-    const data = await fs.readFile(dbFile, 'utf-8');
-    return JSON.parse(data);
-  }
+  const data = await fs.readFile(dbFile, 'utf-8');
+  return JSON.parse(data);
 }
 
-// Write database (file-based)
+// Write database
 async function writeDb(data: any) {
   if (isProduction || isVercel) {
-    throw new Error('writeDb should not be called in production/Vercel');
+    memoryDb = data;
+    return;
   }
   
-  await ensureDbDir();
   await fs.writeFile(dbFile, JSON.stringify(data, null, 2));
 }
 
-// Generate unique room code
+// Generate room code
 export function generateRoomCode(): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
   let result = '';
@@ -117,7 +107,7 @@ export const players = {
   async create(username: string) {
     if (isProduction) {
       const result = await pool!.query(
-        'INSERT INTO players (username) VALUES ($1) RETURNING *',
+        'INSERT INTO players (username, games_played, games_won) VALUES ($1, 0, 0) RETURNING *',
         [username]
       );
       return result.rows[0];
@@ -205,6 +195,28 @@ export const players = {
       player.games_won += won;
       await writeDb(db);
     }
+  },
+
+  async deleteOldPlayers() {
+    if (isProduction) {
+      // Delete players created more than 1 hour ago
+      await pool!.query(
+        'DELETE FROM players WHERE created_at < NOW() - INTERVAL \'1 hour\''
+      );
+      return;
+    }
+    
+    if (isVercel) {
+      if (!memoryDb) await initDatabase();
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      memoryDb.players = memoryDb.players.filter((p: any) => p.created_at > oneHourAgo);
+      return;
+    }
+    
+    const db = await readDb();
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    db.players = db.players.filter((p: any) => p.created_at > oneHourAgo);
+    await writeDb(db);
   }
 };
 
@@ -294,17 +306,40 @@ export const gameRooms = {
   
   async findAllWaiting() {
     if (isProduction) {
-      const result = await pool!.query('SELECT * FROM game_rooms WHERE status = $1 ORDER BY created_at DESC', ['waiting']);
+      const result = await pool!.query(`
+        SELECT gr.*, 
+               COALESCE(participant_count.count, 0) as current_players
+        FROM game_rooms gr
+        LEFT JOIN (
+          SELECT game_id, COUNT(*) as count
+          FROM game_participants
+          GROUP BY game_id
+        ) participant_count ON gr.id = participant_count.game_id
+        WHERE gr.status = 'waiting'
+        ORDER BY gr.created_at DESC
+      `);
       return result.rows;
     }
     
     if (isVercel) {
       if (!memoryDb) await initDatabase();
-      return memoryDb.game_rooms.filter((r: any) => r.status === 'waiting').sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      const rooms = memoryDb.game_rooms.filter((r: any) => r.status === 'waiting');
+      // Recalculate current_players from actual participants
+      for (const room of rooms) {
+        const participantCount = memoryDb.game_participants.filter((p: any) => p.game_id === room.id).length;
+        room.current_players = participantCount;
+      }
+      return rooms.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     }
     
     const db = await readDb();
-    return db.game_rooms.filter((r: any) => r.status === 'waiting').sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    const rooms = db.game_rooms.filter((r: any) => r.status === 'waiting');
+    // Recalculate current_players from actual participants
+    for (const room of rooms) {
+      const participantCount = db.game_participants.filter((p: any) => p.game_id === room.id).length;
+      room.current_players = participantCount;
+    }
+    return rooms.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
   },
   
   async updateStatus(id: number, status: string, phase: string, dayNumber: number) {
@@ -360,9 +395,32 @@ export const gameRooms = {
     }
   },
 
+  async updateHost(id: number, newHostId: number) {
+    if (isProduction) {
+      await pool!.query('UPDATE game_rooms SET host_id = $1 WHERE id = $2', [newHostId, id]);
+      return;
+    }
+    
+    if (isVercel) {
+      if (!memoryDb) await initDatabase();
+      const room = memoryDb.game_rooms.find((r: any) => r.id === id);
+      if (room) {
+        room.host_id = newHostId;
+      }
+      return;
+    }
+    
+    const db = await readDb();
+    const room = db.game_rooms.find((r: any) => r.id === id);
+    if (room) {
+      room.host_id = newHostId;
+      await writeDb(db);
+    }
+  },
+
   async delete(id: number) {
     if (isProduction) {
-      // Delete all related data first (CASCADE should handle this, but being explicit)
+      // Delete in order due to foreign key constraints
       await pool!.query('DELETE FROM game_messages WHERE game_id = $1', [id]);
       await pool!.query('DELETE FROM game_actions WHERE game_id = $1', [id]);
       await pool!.query('DELETE FROM game_participants WHERE game_id = $1', [id]);
@@ -372,7 +430,6 @@ export const gameRooms = {
     
     if (isVercel) {
       if (!memoryDb) await initDatabase();
-      // Delete all related data first
       memoryDb.game_messages = memoryDb.game_messages.filter((m: any) => m.game_id !== id);
       memoryDb.game_actions = memoryDb.game_actions.filter((a: any) => a.game_id !== id);
       memoryDb.game_participants = memoryDb.game_participants.filter((p: any) => p.game_id !== id);
@@ -381,7 +438,6 @@ export const gameRooms = {
     }
     
     const db = await readDb();
-    // Delete all related data first
     db.game_messages = db.game_messages.filter((m: any) => m.game_id !== id);
     db.game_actions = db.game_actions.filter((a: any) => a.game_id !== id);
     db.game_participants = db.game_participants.filter((p: any) => p.game_id !== id);
@@ -395,7 +451,7 @@ export const gameParticipants = {
   async create(gameId: number, playerId: number, role: string, isHost: boolean) {
     if (isProduction) {
       const result = await pool!.query(
-        'INSERT INTO game_participants (game_id, player_id, role, is_alive, is_host) VALUES ($1, $2, $3, true, $4) RETURNING *',
+        'INSERT INTO game_participants (game_id, player_id, role, is_alive, is_host, joined_at) VALUES ($1, $2, $3, true, $4, NOW()) RETURNING *',
         [gameId, playerId, role, isHost]
       );
       return result.rows[0];
@@ -440,7 +496,7 @@ export const gameParticipants = {
          FROM game_participants gp 
          JOIN players p ON gp.player_id = p.id 
          WHERE gp.game_id = $1 
-         ORDER BY gp.created_at ASC`,
+         ORDER BY gp.joined_at ASC`,
         [gameId]
       );
       return result.rows;
@@ -575,6 +631,56 @@ export const gameParticipants = {
       participant.last_healed_player_id = lastHealedPlayerId;
       await writeDb(db);
     }
+  },
+
+  async remove(gameId: number, playerId: number) {
+    if (isProduction) {
+      await pool!.query(
+        'DELETE FROM game_participants WHERE game_id = $1 AND player_id = $2',
+        [gameId, playerId]
+      );
+      return;
+    }
+    
+    if (isVercel) {
+      if (!memoryDb) await initDatabase();
+      memoryDb.game_participants = memoryDb.game_participants.filter(
+        (p: any) => !(p.game_id === gameId && p.player_id === playerId)
+      );
+      return;
+    }
+    
+    const db = await readDb();
+    db.game_participants = db.game_participants.filter(
+      (p: any) => !(p.game_id === gameId && p.player_id === playerId)
+    );
+    await writeDb(db);
+  },
+
+  async updateHost(gameId: number, playerId: number, isHost: boolean) {
+    if (isProduction) {
+      await pool!.query(
+        'UPDATE game_participants SET is_host = $1 WHERE game_id = $2 AND player_id = $3',
+        [isHost, gameId, playerId]
+      );
+      return;
+    }
+    
+    if (isVercel) {
+      if (!memoryDb) await initDatabase();
+      const participant = memoryDb.game_participants.find((p: any) => p.game_id === gameId && p.player_id === playerId);
+      if (participant) {
+        participant.is_host = isHost;
+      }
+      return;
+    }
+    
+    const db = await readDb();
+    const participant = db.game_participants.find((p: any) => p.game_id === gameId && p.player_id === playerId);
+    if (participant) {
+      participant.is_host = isHost;
+      await writeDb(db);
+    }
   }
 };
 
@@ -624,7 +730,7 @@ export const gameActions = {
   async findByGameAndPhase(gameId: number, phase: string, dayNumber: number) {
     if (isProduction) {
       const result = await pool!.query(
-        'SELECT * FROM game_actions WHERE game_id = $1 AND day_number = $2',
+        'SELECT * FROM game_actions WHERE game_id = $1 AND day_number = $2 ORDER BY created_at ASC',
         [gameId, dayNumber]
       );
       return result.rows;
@@ -632,33 +738,33 @@ export const gameActions = {
     
     if (isVercel) {
       if (!memoryDb) await initDatabase();
-      return memoryDb.game_actions.filter((a: any) => a.game_id === gameId && a.phase === phase && a.day_number === dayNumber);
+      return memoryDb.game_actions.filter((a: any) => a.game_id === gameId && a.day_number === dayNumber);
     }
     
     const db = await readDb();
-    return db.game_actions.filter((a: any) => a.game_id === gameId && a.phase === phase && a.day_number === dayNumber);
+    return db.game_actions.filter((a: any) => a.game_id === gameId && a.day_number === dayNumber);
   },
   
-  async deleteByPlayer(gameId: number, playerId: number, actionType: string, phase: string, dayNumber: number) {
+  async clearByGameAndPhase(gameId: number, dayNumber: number) {
     if (isProduction) {
       await pool!.query(
-        'DELETE FROM game_actions WHERE game_id = $1 AND player_id = $2 AND action_type = $3 AND day_number = $4',
-        [gameId, playerId, actionType, dayNumber]
+        'DELETE FROM game_actions WHERE game_id = $1 AND day_number = $2',
+        [gameId, dayNumber]
       );
       return;
     }
     
     if (isVercel) {
       if (!memoryDb) await initDatabase();
-      memoryDb.game_actions = memoryDb.game_actions.filter((a: any) => 
-        !(a.game_id === gameId && a.player_id === playerId && a.action_type === actionType && a.phase === phase && a.day_number === dayNumber)
+      memoryDb.game_actions = memoryDb.game_actions.filter(
+        (a: any) => !(a.game_id === gameId && a.day_number === dayNumber)
       );
       return;
     }
     
     const db = await readDb();
-    db.game_actions = db.game_actions.filter((a: any) => 
-      !(a.game_id === gameId && a.player_id === playerId && a.action_type === actionType && a.phase === phase && a.day_number === dayNumber)
+    db.game_actions = db.game_actions.filter(
+      (a: any) => !(a.game_id === gameId && a.day_number === dayNumber)
     );
     await writeDb(db);
   }
@@ -666,11 +772,11 @@ export const gameActions = {
 
 // Game messages operations
 export const gameMessages = {
-  async create(gameId: number, playerId: number | null, message: string, messageType: string, visibleToPlayerId: number | null, isVisibleToAll: boolean) {
+  async create(gameId: number, playerId: number | null, message: string, messageType: string, visibleToPlayerId: number | null, isSystem: boolean) {
     if (isProduction) {
       const result = await pool!.query(
-        'INSERT INTO game_messages (game_id, player_id, message, message_type) VALUES ($1, $2, $3, $4) RETURNING *',
-        [gameId, playerId, message, messageType]
+        'INSERT INTO game_messages (game_id, player_id, message, message_type, visible_to_player_id, is_system, created_at) VALUES ($1, $2, $3, $4, $5, $6, NOW()) RETURNING *',
+        [gameId, playerId, message, messageType, visibleToPlayerId, isSystem]
       );
       return result.rows[0];
     }
@@ -684,7 +790,7 @@ export const gameMessages = {
         message,
         message_type: messageType,
         visible_to_player_id: visibleToPlayerId,
-        is_visible_to_all: isVisibleToAll,
+        is_system: isSystem,
         created_at: new Date().toISOString()
       };
       memoryDb.game_messages.push(newMessage);
@@ -699,7 +805,7 @@ export const gameMessages = {
       message,
       message_type: messageType,
       visible_to_player_id: visibleToPlayerId,
-      is_visible_to_all: isVisibleToAll,
+      is_system: isSystem,
       created_at: new Date().toISOString()
     };
     db.game_messages.push(newMessage);
@@ -707,40 +813,57 @@ export const gameMessages = {
     return newMessage;
   },
   
-  async findByGame(gameId: number) {
+  async findByGame(gameId: number, playerId: number) {
     if (isProduction) {
       const result = await pool!.query(
         `SELECT gm.*, p.username 
          FROM game_messages gm 
          LEFT JOIN players p ON gm.player_id = p.id 
          WHERE gm.game_id = $1 
+         AND (gm.visible_to_player_id IS NULL OR gm.visible_to_player_id = $2)
          ORDER BY gm.created_at ASC`,
-        [gameId]
+        [gameId, playerId]
       );
       return result.rows;
     }
     
     if (isVercel) {
       if (!memoryDb) await initDatabase();
-      const messages = memoryDb.game_messages.filter((m: any) => m.game_id === gameId);
+      const messages = memoryDb.game_messages.filter((m: any) => 
+        m.game_id === gameId && 
+        (m.visible_to_player_id === null || m.visible_to_player_id === playerId)
+      );
       const players = memoryDb.players;
       return messages.map((m: any) => ({
         ...m,
-        username: m.player_id ? players.find((p: any) => p.id === m.player_id)?.username : null
+        username: m.player_id ? players.find((p: any) => p.id === m.player_id)?.username || 'Unknown' : null
       })).sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
     }
     
     const db = await readDb();
-    const messages = db.game_messages.filter((m: any) => m.game_id === gameId);
+    const messages = db.game_messages.filter((m: any) => 
+      m.game_id === gameId && 
+      (m.visible_to_player_id === null || m.visible_to_player_id === playerId)
+    );
     const players = db.players;
     return messages.map((m: any) => ({
       ...m,
-      username: m.player_id ? players.find((p: any) => p.id === m.player_id)?.username : null
+      username: m.player_id ? players.find((p: any) => p.id === m.player_id)?.username || 'Unknown' : null
     })).sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
   }
 };
 
-// Initialize database on import
+// Initialize database on module load
 initDatabase();
 
-export default { players, gameRooms, gameParticipants, gameActions, gameMessages };
+// Auto cleanup function - runs every hour
+setInterval(async () => {
+  try {
+    await players.deleteOldPlayers();
+    console.log('Cleaned up old players');
+  } catch (error) {
+    console.error('Error during cleanup:', error);
+  }
+}, 60 * 60 * 1000); // 1 hour
+
+export { initDatabase };

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { players, generateRoomCode } from '@/lib/db/database'
+import { players } from '@/lib/db/database'
 
 export async function POST(request: NextRequest) {
   try {
@@ -8,6 +8,9 @@ export async function POST(request: NextRequest) {
     if (!username || username.trim().length < 3) {
       return NextResponse.json({ message: 'Username must be at least 3 characters' }, { status: 400 })
     }
+
+    // Clean up old players first
+    await players.deleteOldPlayers()
 
     // Check if username already exists
     const existingPlayer = await players.findByUsername(username.trim())

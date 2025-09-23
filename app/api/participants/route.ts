@@ -31,15 +31,19 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: 'Game has already started' }, { status: 400 })
     }
 
-    if (game.current_players >= game.max_players) {
-      return NextResponse.json({ message: 'Game is full' }, { status: 400 })
+    // Get current participant count
+    const currentParticipants = await gameParticipants.findByGame(game_id)
+    const currentCount = currentParticipants.length
+
+    if (currentCount >= game.max_players) {
+      return NextResponse.json({ message: 'Room is full' }, { status: 400 })
     }
 
     // Create participant
     await gameParticipants.create(game_id, player_id, 'villager', is_host || false)
 
     // Update player count
-    await gameRooms.updatePlayerCount(game_id, game.current_players + 1)
+    await gameRooms.updatePlayerCount(game_id, currentCount + 1)
 
     // Add join message
     await gameMessages.create(
@@ -78,12 +82,37 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ message: 'Game not found' }, { status: 404 })
     }
 
-    // Remove participant (this will need to be implemented in the database module)
-    // For now, we'll just update the player count and add a message
-    
+    // Get participant info
+    const participant = await gameParticipants.findByGameAndPlayer(game_id, player_id)
+    if (!participant) {
+      return NextResponse.json({ message: 'Player not in game' }, { status: 404 })
+    }
+
+    // Remove participant
+    await gameParticipants.remove(game_id, player_id)
+
+    // Get updated participant count
+    const remainingParticipants = await gameParticipants.findByGame(game_id)
+    const newCount = remainingParticipants.length
+
     // Update player count
-    if (game.current_players > 0) {
-      await gameRooms.updatePlayerCount(game_id, game.current_players - 1)
+    await gameRooms.updatePlayerCount(game_id, newCount)
+
+    // If the leaving player was the host, transfer host to another player
+    if (participant.is_host && remainingParticipants.length > 0) {
+      const newHost = remainingParticipants[0]
+      await gameParticipants.updateHost(game_id, newHost.player_id, true)
+      await gameRooms.updateHost(game_id, newHost.player_id)
+      
+      // Add host transfer message
+      await gameMessages.create(
+        game_id, 
+        null, 
+        `${newHost.username} is now the host!`, 
+        'system', 
+        null, 
+        true
+      )
     }
 
     // Add leave message

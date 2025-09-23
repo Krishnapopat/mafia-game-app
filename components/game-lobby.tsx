@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
-import { Users, Crown, Play, Plus, LogOut, Settings, Check, Shield, Trash2 } from "lucide-react"
+import { Users, Crown, Play, Plus, LogOut, Settings, Check, Shield, Trash2, AlertCircle } from "lucide-react"
 import { useRouter } from "next/navigation"
 
 interface GameRoom {
@@ -61,6 +61,7 @@ export function GameLobby() {
   const [roleConfig, setRoleConfig] = useState<RoleConfig>(DEFAULT_ROLE_CONFIGS[8])
   const [doctorCanHealSameTwice, setDoctorCanHealSameTwice] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState<string | null>(null)
   const [username, setUsername] = useState("")
   const [isUpdatingRoles, setIsUpdatingRoles] = useState(false)
   const router = useRouter()
@@ -109,6 +110,7 @@ export function GameLobby() {
     if (!username.trim()) return
 
     setIsLoading(true)
+    setError(null)
     try {
       const response = await fetch('/api/players', {
         method: 'POST',
@@ -124,6 +126,7 @@ export function GameLobby() {
       const playerData = await response.json()
       setPlayer(playerData)
       localStorage.setItem('mafia_player', JSON.stringify(playerData))
+      setSuccess(`Welcome, ${playerData.username}!`)
     } catch (error: any) {
       setError(error.message)
     } finally {
@@ -137,6 +140,7 @@ export function GameLobby() {
 
     setIsLoading(true)
     setError(null)
+    setSuccess(null)
     
     try {
       const response = await fetch('/api/rooms', {
@@ -169,6 +173,7 @@ export function GameLobby() {
         })
       })
 
+      setSuccess(`Room "${roomName}" created successfully!`)
       router.push(`/game/${roomData.id}`)
     } catch (error: any) {
       setError(error.message)
@@ -183,6 +188,7 @@ export function GameLobby() {
 
     setIsLoading(true)
     setError(null)
+    setSuccess(null)
     
     try {
       const response = await fetch('/api/rooms/join', {
@@ -200,6 +206,7 @@ export function GameLobby() {
       }
 
       const roomData = await response.json()
+      setSuccess(`Joined room "${roomData.name}"!`)
       router.push(`/game/${roomData.id}`)
     } catch (error: any) {
       setError(error.message)
@@ -213,6 +220,7 @@ export function GameLobby() {
 
     setIsLoading(true)
     setError(null)
+    setSuccess(null)
     
     try {
       const response = await fetch('/api/participants', {
@@ -230,6 +238,10 @@ export function GameLobby() {
         throw new Error(error.message)
       }
 
+      // Find room name for success message
+      const room = gameRooms.find(r => r.id === roomId)
+      setSuccess(`Joined room "${room?.name || 'Unknown'}"!`)
+      
       // Navigate to the game room
       router.push(`/game/${roomId}`)
     } catch (error: any) {
@@ -250,6 +262,8 @@ export function GameLobby() {
     }
 
     setIsLoading(true)
+    setError(null)
+    setSuccess(null)
     try {
       const response = await fetch(`/api/rooms/${roomId}`, {
         method: 'DELETE'
@@ -260,6 +274,7 @@ export function GameLobby() {
         throw new Error(error.message)
       }
 
+      setSuccess(`Room "${room.name}" deleted successfully!`)
       // Refresh the rooms list
       fetchGameRooms()
     } catch (error: any) {
@@ -273,6 +288,8 @@ export function GameLobby() {
     localStorage.removeItem('mafia_player')
     setPlayer(null)
     setUsername("")
+    setError(null)
+    setSuccess(null)
   }
 
   const updateRoleCount = (role: keyof RoleConfig, delta: number) => {
@@ -314,6 +331,17 @@ export function GameLobby() {
     return getTotalRoles() === maxPlayers && !isUpdatingRoles
   }
 
+  // Clear messages after 5 seconds
+  useEffect(() => {
+    if (error || success) {
+      const timer = setTimeout(() => {
+        setError(null)
+        setSuccess(null)
+      }, 5000)
+      return () => clearTimeout(timer)
+    }
+  }, [error, success])
+
   // If no player is set, show username form
   if (!player) {
     return (
@@ -344,7 +372,18 @@ export function GameLobby() {
                       maxLength={20}
                     />
                   </div>
-                  {error && <p className="text-sm text-red-400">{error}</p>}
+                  {error && (
+                    <div className="p-3 bg-red-900/30 border border-red-600 rounded-lg flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 text-red-400" />
+                      <p className="text-red-200 text-sm">{error}</p>
+                    </div>
+                  )}
+                  {success && (
+                    <div className="p-3 bg-green-900/30 border border-green-600 rounded-lg flex items-center gap-2">
+                      <Check className="w-4 h-4 text-green-400" />
+                      <p className="text-green-200 text-sm">{success}</p>
+                    </div>
+                  )}
                   <Button
                     type="submit"
                     className="w-full bg-red-600 hover:bg-red-700 text-white"
@@ -385,6 +424,24 @@ export function GameLobby() {
           </Button>
         </div>
       </div>
+
+      {/* Global Messages */}
+      {(error || success) && (
+        <div className="mb-6">
+          {error && (
+            <div className="p-4 bg-red-900/30 border border-red-600 rounded-lg flex items-center gap-2">
+              <AlertCircle className="w-5 h-5 text-red-400" />
+              <p className="text-red-200">{error}</p>
+            </div>
+          )}
+          {success && (
+            <div className="p-4 bg-green-900/30 border border-green-600 rounded-lg flex items-center gap-2">
+              <Check className="w-5 h-5 text-green-400" />
+              <p className="text-green-200">{success}</p>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Create Room */}
@@ -433,12 +490,6 @@ export function GameLobby() {
                       className="bg-slate-700/50 border-slate-600 text-white"
                     />
                   </div>
-                  
-                  {error && (
-                    <div className="p-3 bg-red-900/30 border border-red-600 rounded-lg">
-                      <p className="text-red-200 text-sm">{error}</p>
-                    </div>
-                  )}
                   
                   <div className="flex gap-2">
                     <Button
@@ -677,11 +728,11 @@ export function GameLobby() {
                         <Button
                           onClick={() => handleJoinRoom(room.id)}
                           disabled={isLoading || room.current_players >= room.max_players}
-                          className="bg-purple-600 hover:bg-purple-700 text-white"
+                          className="bg-purple-600 hover:bg-purple-700 text-white disabled:bg-slate-600 disabled:text-slate-400"
                           size="sm"
                         >
                           <Play className="w-4 h-4 mr-1" />
-                          {isLoading ? "Joining..." : "Join"}
+                          {isLoading ? "Joining..." : room.current_players >= room.max_players ? "Full" : "Join"}
                         </Button>
                         {room.host_id === player.id && (
                           <Button

@@ -810,9 +810,10 @@ export const gameActions = {
 export const gameMessages = {
   async create(gameId: number, playerId: number | null, message: string, messageType: string, visibleToPlayerId: number | null, isSystem: boolean) {
     if (isProduction) {
+      // Remove is_system column since it doesn't exist in the database
       const result = await pool!.query(
-        'INSERT INTO game_messages (game_id, player_id, message, message_type, is_system, created_at) VALUES ($1, $2, $3, $4, $5, NOW()) RETURNING *',
-        [gameId, playerId, message, messageType, isSystem]
+        'INSERT INTO game_messages (game_id, player_id, message, message_type, created_at) VALUES ($1, $2, $3, $4, NOW()) RETURNING *',
+        [gameId, playerId, message, messageType]
       );
       return result.rows[0];
     }

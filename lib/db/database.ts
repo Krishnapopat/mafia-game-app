@@ -811,8 +811,8 @@ export const gameMessages = {
   async create(gameId: number, playerId: number | null, message: string, messageType: string, visibleToPlayerId: number | null, isSystem: boolean) {
     if (isProduction) {
       const result = await pool!.query(
-        'INSERT INTO game_messages (game_id, player_id, message, message_type, visible_to_player_id, is_system, created_at) VALUES ($1, $2, $3, $4, $5, $6, NOW()) RETURNING *',
-        [gameId, playerId, message, messageType, visibleToPlayerId, isSystem]
+        'INSERT INTO game_messages (game_id, player_id, message, message_type, is_system, created_at) VALUES ($1, $2, $3, $4, $5, NOW()) RETURNING *',
+        [gameId, playerId, message, messageType, isSystem]
       );
       return result.rows[0];
     }
@@ -856,9 +856,8 @@ export const gameMessages = {
          FROM game_messages gm 
          LEFT JOIN players p ON gm.player_id = p.id 
          WHERE gm.game_id = $1 
-         AND (gm.visible_to_player_id IS NULL OR gm.visible_to_player_id = $2)
          ORDER BY gm.created_at ASC`,
-        [gameId, playerId]
+        [gameId]
       );
       return result.rows;
     }

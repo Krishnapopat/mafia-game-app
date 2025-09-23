@@ -541,8 +541,8 @@ export function GameLobby() {
                       <p className="text-slate-200 font-medium">Healing Restriction</p>
                       <p className="text-slate-400 text-sm">
                         {doctorCanHealSameTwice 
-                          ? "Doctor can heal the same person multiple times"
-                          : "Doctor cannot heal the same person twice in a row"
+                          ? "Doctor cannot heal the same person twice in a row"
+                          : "Doctor can heal the same person multiple times"
                         }
                       </p>
                     </div>
@@ -552,7 +552,7 @@ export function GameLobby() {
                       variant={doctorCanHealSameTwice ? "default" : "outline"}
                       size="sm"
                       className={doctorCanHealSameTwice 
-                        ? "bg-green-600 hover:bg-green-700 text-white" 
+                        ? "bg-red-600 hover:bg-red-700 text-white" 
                         : "border-slate-600 text-slate-300 hover:bg-slate-700"
                       }
                     >
@@ -719,7 +719,7 @@ export function GameLobby() {
                           </Badge>
                           {room.doctor_can_heal_same_twice !== undefined && (
                             <span className="text-xs">
-                              Doctor: {room.doctor_can_heal_same_twice ? "No restriction" : "Restricted"}
+                              Doctor: {room.doctor_can_heal_same_twice ? "Restricted" : "No restriction"}
                             </span>
                           )}
                         </div>

@@ -279,15 +279,17 @@ export function GameRoom({ gameId }: GameRoomProps) {
       if (currentPlayer.role === "mafia") {
         return participants.filter((p) => p.is_alive && p.role !== "mafia" && p.player_id !== currentPlayer.player_id)
       } else if (currentPlayer.role === "doctor") {
-        const canHealSameTwice = gameRoom.doctor_can_heal_same_twice
-        if (canHealSameTwice) {
-          return participants.filter((p) => p.is_alive && p.player_id !== currentPlayer.player_id)
-        } else {
+        const isRestricted = gameRoom.doctor_can_heal_same_twice
+        if (isRestricted) {
+          // When restricted (toggle ON), cannot heal same person twice
           return participants.filter((p) => 
             p.is_alive && 
             p.player_id !== currentPlayer.player_id && 
             p.player_id !== currentPlayer.last_healed_player_id
           )
+        } else {
+          // When not restricted (toggle OFF), can heal anyone
+          return participants.filter((p) => p.is_alive && p.player_id !== currentPlayer.player_id)
         }
       } else if (currentPlayer.role === "detective" || currentPlayer.role === "fake_detective") {
         return participants.filter((p) => p.is_alive && p.player_id !== currentPlayer.player_id)

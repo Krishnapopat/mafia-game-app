@@ -20,16 +20,28 @@ export async function POST(
       return NextResponse.json({ message: 'Game not found' }, { status: 404 })
     }
 
+    if (game.current_phase !== 'day') {
+      return NextResponse.json({ message: 'Voting is only allowed during day phase' }, { status: 400 })
+    }
+
+    // Get player info
+    const player = await gameParticipants.findByGameAndPlayer(gameId, player_id)
+    if (!player) {
+      return NextResponse.json({ message: 'Player not found in game' }, { status: 404 })
+    }
+
+    if (!player.is_alive) {
+      return NextResponse.json({ message: 'Dead players cannot vote' }, { status: 400 })
+    }
+
     // Create vote action
-    await gameActions.create(gameId, player_id, 'vote', target_id, game.current_phase, game.day_number)
+    await gameActions.create(gameId, player_id, 'vote', target_id, 'day', game.day_number)
 
     // Add confirmation message
-    await gameMessages.create(gameId, player_id, `You have voted to eliminate a player.`, 'system', player_id, false)
+    await gameMessages.create(gameId, player_id, `You have voted to eliminate someone.`, 'private', player_id, false)
 
     // Check if all alive players have voted
-    if (game.current_phase === 'day') {
-      await checkAndProcessVotes(gameId, game)
-    }
+    await checkAndProcessVotes(gameId, game)
 
     return NextResponse.json({ success: true })
   } catch (error) {
@@ -46,100 +58,92 @@ async function checkAndProcessVotes(gameId: number, game: any) {
     
     // Get all votes for this day
     const votes = await gameActions.findByGameAndPhase(gameId, 'day', game.day_number)
-    const voteActions = votes.filter(vote => vote.action_type === 'vote')
-    
-    // Count unique voters
-    const uniqueVoters = [...new Set(voteActions.map(vote => vote.player_id))]
     
     // Check if all alive players have voted
-    const allPlayersVoted = aliveParticipants.every(player => 
-      uniqueVoters.includes(player.player_id)
-    )
-    
-    if (allPlayersVoted && aliveParticipants.length > 0) {
-      // Process votes and eliminate player
-      await processVotes(gameId, game, voteActions, participants)
+    if (votes.length >= aliveParticipants.length) {
+      await processVotes(gameId, game, votes)
     }
   } catch (error) {
     console.error('Error checking votes:', error)
   }
 }
 
-async function processVotes(gameId: number, game: any, votes: any[], participants: any[]) {
+async function processVotes(gameId: number, game: any, votes: any[]) {
   try {
     // Count votes for each player
     const voteCounts: { [key: number]: number } = {}
-    
-    for (const vote of votes) {
-      const targetId = vote.target_id
-      voteCounts[targetId] = (voteCounts[targetId] || 0) + 1
-    }
-    
+    votes.forEach(vote => {
+      voteCounts[vote.target_id] = (voteCounts[vote.target_id] || 0) + 1
+    })
+
     // Find player with most votes
     let maxVotes = 0
     let eliminatedPlayerId = null
     
-    for (const [playerId, count] of Object.entries(voteCounts)) {
+    Object.entries(voteCounts).forEach(([playerId, count]) => {
       if (count > maxVotes) {
         maxVotes = count
         eliminatedPlayerId = parseInt(playerId)
       }
-    }
-    
+    })
+
     if (eliminatedPlayerId) {
-      // Eliminate the player
-      await gameParticipants.updateAlive(gameId, eliminatedPlayerId, false)
-      
+      const participants = await gameParticipants.findByGame(gameId)
       const eliminatedPlayer = participants.find(p => p.player_id === eliminatedPlayerId)
+      
       if (eliminatedPlayer) {
-        await gameMessages.create(
-          gameId, 
-          null, 
-          `${eliminatedPlayer.username} has been eliminated by vote!`, 
-          'death', 
-          null, 
-          true
-        )
+        await gameParticipants.updateAlive(gameId, eliminatedPlayerId, false)
         
-        // Check if eliminated player was jester
+        // Check if Jester was eliminated
         if (eliminatedPlayer.role === 'jester') {
-          // Jester wins!
           await gameRooms.updateStatus(gameId, 'finished', 'finished', game.day_number)
           await gameMessages.create(
             gameId, 
             null, 
-            `Game Over! The Jester wins by getting eliminated!`, 
-            'system', 
+            `${eliminatedPlayer.username} was eliminated! The Jester wins!`, 
+            'death', 
             null, 
-            true
+            false
           )
           return
         }
+        
+        await gameMessages.create(
+          gameId, 
+          null, 
+          `${eliminatedPlayer.username} was eliminated by vote!`, 
+          'death', 
+          null, 
+          false
+        )
       }
     }
+
+    // Clear day votes
+    await gameActions.clearByGameAndPhase(gameId, game.day_number)
     
     // Check win conditions
+    const participants = await gameParticipants.findByGame(gameId)
     const aliveParticipants = participants.filter(p => p.is_alive)
-    const aliveMafia = aliveParticipants.filter(p => ['mafia', 'bandit'].includes(p.role))
-    const aliveVillagers = aliveParticipants.filter(p => !['mafia', 'bandit'].includes(p.role))
+    const aliveMafia = aliveParticipants.filter(p => p.role === 'mafia')
+    const aliveVillagers = aliveParticipants.filter(p => ['villager', 'doctor', 'detective', 'fake_detective'].includes(p.role))
     
     let winner = null
     if (aliveMafia.length === 0) {
-      winner = 'villagers'
+      winner = 'Villagers'
     } else if (aliveMafia.length >= aliveVillagers.length) {
-      winner = 'mafia'
+      winner = 'Mafia'
     }
     
     if (winner) {
-      // Game over
       await gameRooms.updateStatus(gameId, 'finished', 'finished', game.day_number)
       await gameMessages.create(
         gameId, 
         null, 
-        `Game Over! ${winner === 'mafia' ? 'The Mafia' : 'The Villagers'} win!`, 
+        `Game Over - ${winner} win!`, 
         'system', 
         null, 
-        true
+        false
       )
     } else {
       // Transition to night phase
@@ -148,13 +152,12 @@ async function processVotes(gameId: number, game: any, votes: any[], participant
       await gameMessages.create(
         gameId, 
         null, 
-        `Night ${nextDay} begins. Special roles, make your moves.`, 
+        `Night ${nextDay} begins.`, 
         'system', 
         null, 
-        true
+        false
       )
     }
-    
   } catch (error) {
     console.error('Error processing votes:', error)
   }

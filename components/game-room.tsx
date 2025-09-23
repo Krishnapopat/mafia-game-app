@@ -64,16 +64,7 @@ interface GameMessage {
   message_type: string
   created_at: string
   username?: string
-}
-
-const ROLE_ICONS = {
-  villager: Users,
-  mafia: Skull,
-  doctor: Shield,
-  detective: Search,
-  fake_detective: EyeOff,
-  jester: Zap,
-  bandit: Zap,
+  visible_to_player_id?: number
 }
 
 const ROLE_COLORS = {
@@ -137,7 +128,18 @@ export function GameRoom({ gameId }: GameRoomProps) {
 
       if (messagesRes.ok) {
         const messagesData = await messagesRes.json()
-        setMessages(messagesData)
+        
+        // Filter messages based on visibility
+        const savedPlayer = localStorage.getItem('mafia_player')
+        if (savedPlayer) {
+          const player = JSON.parse(savedPlayer)
+          const filteredMessages = messagesData.filter((msg: GameMessage) => 
+            !msg.visible_to_player_id || msg.visible_to_player_id === player.id
+          )
+          setMessages(filteredMessages)
+        } else {
+          setMessages(messagesData)
+        }
         
         // Check for room deletion message
         const deletionMessage = messagesData.find((msg: GameMessage) => 
@@ -202,22 +204,22 @@ export function GameRoom({ gameId }: GameRoomProps) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          action_type: currentPlayer.role === 'mafia' ? 'kill' : 
-                      currentPlayer.role === 'doctor' ? 'heal' : 'investigate',
+          action_type: getActionType(),
           target_id: selectedTarget,
           player_id: currentPlayer.player_id
         })
       })
 
-      if (response.ok) {
-        setHasActed(true)
-        fetchGameData()
-      } else {
+      if (!response.ok) {
         const error = await response.json()
-        setError(error.message)
+        throw new Error(error.message)
       }
-    } catch (error) {
-      console.error('Error performing action:', error)
+
+      setHasActed(true)
+      setSelectedTarget(null)
+      fetchGameData()
+    } catch (error: any) {
+      setError(error.message)
     }
   }
 
@@ -234,12 +236,16 @@ export function GameRoom({ gameId }: GameRoomProps) {
         })
       })
 
-      if (response.ok) {
-        setHasActed(true)
-        fetchGameData()
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.message)
       }
-    } catch (error) {
-      console.error('Error voting:', error)
+
+      setHasActed(true)
+      setSelectedTarget(null)
+      fetchGameData()
+    } catch (error: any) {
+      setError(error.message)
     }
   }
 
@@ -279,7 +285,7 @@ export function GameRoom({ gameId }: GameRoomProps) {
         } else {
           return participants.filter((p) => 
             p.is_alive && 
-            p.player_id !== currentPlayer.player_id &&
+            p.player_id !== currentPlayer.player_id && 
             p.player_id !== currentPlayer.last_healed_player_id
           )
         }
@@ -293,29 +299,49 @@ export function GameRoom({ gameId }: GameRoomProps) {
     return []
   }
 
-  const availableTargets = getAvailableTargets()
-  const canAct = currentPlayer?.is_alive && !hasActed && availableTargets.length > 0
+  const getActionType = () => {
+    if (!currentPlayer) return ""
+    
+    switch (currentPlayer.role) {
+      case "mafia":
+        return "kill"
+      case "doctor":
+        return "heal"
+      case "detective":
+      case "fake_detective":
+        return "investigate"
+      default:
+        return ""
+    }
+  }
 
-  // Show room deleted message
+  const canAct = () => {
+    if (!currentPlayer || !currentPlayer.is_alive || hasActed) return false
+    
+    if (gameRoom?.current_phase === "night") {
+      return ["mafia", "doctor", "detective", "fake_detective"].includes(currentPlayer.role)
+    } else if (gameRoom?.current_phase === "day") {
+      return true
+    }
+    
+    return false
+  }
+
+  const availableTargets = getAvailableTargets()
+
   if (roomDeleted) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
-        <div className="absolute inset-0 bg-[url('/placeholder-raawb.png')] opacity-5"></div>
-        <div className="relative z-10 text-center">
-          <div className="w-32 h-32 bg-red-900/30 rounded-full flex items-center justify-center mb-6 mx-auto">
-            <AlertCircle className="w-16 h-16 text-red-400" />
-          </div>
-          <h1 className="text-3xl font-bold text-white mb-4">Room Deleted</h1>
-          <p className="text-slate-300 text-lg mb-6">
-            The room has been deleted by the host.
-          </p>
-          <Button 
-            onClick={() => router.push("/")} 
-            className="bg-purple-600 hover:bg-purple-700 text-white"
-          >
-            Return to Lobby
-          </Button>
-        </div>
+        <Card className="bg-slate-800/50 border-slate-700 backdrop-blur-sm">
+          <CardContent className="p-8 text-center">
+            <AlertCircle className="w-16 h-16 text-red-400 mx-auto mb-4" />
+            <h2 className="text-2xl font-bold text-white mb-2">Room Deleted</h2>
+            <p className="text-slate-300 mb-4">This room has been deleted by the host.</p>
+            <Button onClick={() => router.push('/')} className="bg-red-600 hover:bg-red-700 text-white">
+              Return to Lobby
+            </Button>
+          </CardContent>
+        </Card>
       </div>
     )
   }
@@ -323,7 +349,7 @@ export function GameRoom({ gameId }: GameRoomProps) {
   if (!gameRoom || !currentPlayer) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
-        <div className="text-white">Loading...</div>
+        <div className="text-white text-xl">Loading...</div>
       </div>
     )
   }
@@ -332,7 +358,6 @@ export function GameRoom({ gameId }: GameRoomProps) {
   const shouldShowRole = gameRoom.status !== "waiting" && gameRoom.current_phase !== "lobby"
   const displayRole = shouldShowRole ? currentPlayer.role : null
 
-  const RoleIcon = displayRole ? ROLE_ICONS[displayRole as keyof typeof ROLE_ICONS] : Users
   const roleColor = displayRole ? ROLE_COLORS[displayRole as keyof typeof ROLE_COLORS] : "bg-gray-600"
 
   return (
@@ -360,7 +385,6 @@ export function GameRoom({ gameId }: GameRoomProps) {
           <div className="flex items-center gap-4">
             {shouldShowRole && (
               <Badge className={`${roleColor} text-white`}>
-                <RoleIcon className="w-4 h-4 mr-1" />
                 {displayRole?.charAt(0).toUpperCase() + displayRole?.slice(1).replace('_', ' ')}
               </Badge>
             )}
@@ -382,17 +406,28 @@ export function GameRoom({ gameId }: GameRoomProps) {
           </div>
         </div>
 
+        {/* Error Display */}
         {error && (
           <div className="mb-4 p-3 bg-red-900/30 border border-red-600 rounded-lg flex items-center gap-2">
             <AlertCircle className="w-4 h-4 text-red-400" />
-            <p className="text-red-200 text-sm">{error}</p>
+            <p className="text-red-200">{error}</p>
           </div>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-          {/* Players Panel */}
-          <div className="lg:col-span-1">
-            <Card className="bg-slate-800/50 border-slate-700 backdrop-blur-sm">
+        {/* Game Status */}
+        {gameRoom.status === "finished" && (
+          <Card className="bg-slate-800/50 border-slate-700 backdrop-blur-sm mb-6">
+            <CardContent className="p-6 text-center">
+              <h2 className="text-3xl font-bold text-white mb-2">Game Over!</h2>
+              <p className="text-2xl text-green-400">{gameRoom.winner || 'Unknown'} wins!</p>
+            </CardContent>
+          </Card>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Game Info */}
+          <div className="lg:col-span-2">
+            <Card className="bg-slate-800/50 border-slate-700 backdrop-blur-sm mb-6">
               <CardHeader>
                 <CardTitle className="text-white flex items-center gap-2">
                   <Users className="w-5 h-5" />
@@ -402,9 +437,6 @@ export function GameRoom({ gameId }: GameRoomProps) {
               <CardContent>
                 <div className="space-y-2">
                   {participants.map((participant) => {
-                    const ParticipantRoleIcon = ROLE_ICONS[participant.role as keyof typeof ROLE_ICONS] || Users
-                    const participantRoleColor = ROLE_COLORS[participant.role as keyof typeof ROLE_COLORS] || "bg-gray-600"
-
                     return (
                       <div
                         key={participant.id}
@@ -413,12 +445,12 @@ export function GameRoom({ gameId }: GameRoomProps) {
                         } border border-slate-600 ${
                           selectedTarget === participant.player_id ? "ring-2 ring-red-500" : ""
                         } ${
-                          canAct && availableTargets.some((t) => t.player_id === participant.player_id)
+                          canAct() && availableTargets.some((t) => t.player_id === participant.player_id)
                             ? "cursor-pointer hover:bg-slate-600/30"
                             : ""
                         }`}
                         onClick={() => {
-                          if (canAct && availableTargets.some((t) => t.player_id === participant.player_id)) {
+                          if (canAct() && availableTargets.some((t) => t.player_id === participant.player_id)) {
                             setSelectedTarget(participant.player_id)
                           }
                         }}
@@ -431,12 +463,7 @@ export function GameRoom({ gameId }: GameRoomProps) {
                         </div>
                         <div className="flex items-center gap-2">
                           {!participant.is_alive && <Skull className="w-4 h-4 text-red-400" />}
-                          {shouldShowRole && (
-                            <Badge size="sm" className={`${participantRoleColor} text-white`}>
-                              <ParticipantRoleIcon className="w-3 h-3" />
-                            </Badge>
-                          )}
-                          {selectedTarget === participant.player_id && canAct && (
+                          {selectedTarget === participant.player_id && canAct() && (
                             <Target className="w-4 h-4 text-red-400" />
                           )}
                         </div>
@@ -452,154 +479,37 @@ export function GameRoom({ gameId }: GameRoomProps) {
                   </Button>
                 )}
 
-                {canAct && selectedTarget && (
-                  <div className="mt-4 space-y-2">
-                    {gameRoom.current_phase === "night" && (
+                {canAct() && selectedTarget && (
+                  <div className="mt-4 p-4 bg-slate-700/30 rounded-lg border border-slate-600">
+                    <p className="text-slate-300 mb-2">
+                      {gameRoom.current_phase === "night" 
+                        ? `You will ${getActionType()} ${participants.find(p => p.player_id === selectedTarget)?.username}`
+                        : `You will vote to eliminate ${participants.find(p => p.player_id === selectedTarget)?.username}`
+                      }
+                    </p>
+                    <div className="flex gap-2">
                       <Button
-                        onClick={handleNightAction}
-                        className="w-full bg-purple-600 hover:bg-purple-700 text-white"
+                        onClick={gameRoom.current_phase === "night" ? handleNightAction : handleVote}
+                        className="bg-red-600 hover:bg-red-700 text-white"
                       >
-                        {currentPlayer.role === "mafia" && "Kill Target"}
-                        {currentPlayer.role === "doctor" && "Heal Target"}
-                        {currentPlayer.role === "detective" && "Investigate Target"}
-                        {currentPlayer.role === "fake_detective" && "Investigate Target"}
+                        {gameRoom.current_phase === "night" ? "Confirm Action" : "Vote"}
                       </Button>
-                    )}
-                    {gameRoom.current_phase === "day" && (
-                      <Button onClick={handleVote} className="w-full bg-red-600 hover:bg-red-700 text-white">
-                        <Vote className="w-4 h-4 mr-2" />
-                        Vote to Eliminate
+                      <Button
+                        onClick={() => setSelectedTarget(null)}
+                        variant="outline"
+                        className="border-slate-600 text-slate-300 hover:bg-slate-700"
+                      >
+                        Cancel
                       </Button>
-                    )}
+                    </div>
                   </div>
                 )}
 
                 {hasActed && (
                   <div className="mt-4 p-3 bg-green-900/30 border border-green-600 rounded-lg">
-                    <p className="text-green-200 text-sm text-center">
-                      {gameRoom.current_phase === "night" ? "Action submitted" : "Vote cast"}
-                    </p>
+                    <p className="text-green-200 text-center">You have completed your action for this phase.</p>
                   </div>
                 )}
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Game Board */}
-          <div className="lg:col-span-2">
-            <Card className="bg-slate-800/50 border-slate-700 backdrop-blur-sm h-[600px]">
-              <CardHeader>
-                <CardTitle className="text-white flex items-center justify-between">
-                  <span>
-                    {gameRoom.status === "waiting"
-                      ? "Waiting for players..."
-                      : gameRoom.status === "finished"
-                        ? `Game Over - ${gameRoom.winner} wins!`
-                        : `${gameRoom.current_phase.charAt(0).toUpperCase() + gameRoom.current_phase.slice(1)} Phase - Day ${gameRoom.day_number}`}
-                  </span>
-                  <Badge
-                    variant={
-                      gameRoom.status === "waiting"
-                        ? "secondary"
-                        : gameRoom.status === "finished"
-                          ? "destructive"
-                          : "default"
-                    }
-                  >
-                    {gameRoom.status}
-                  </Badge>
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="h-full flex flex-col">
-                <div className="flex-1 flex items-center justify-center">
-                  {gameRoom.status === "waiting" ? (
-                    <div className="text-center">
-                      <Users className="w-16 h-16 text-slate-400 mx-auto mb-4" />
-                      <p className="text-slate-300 text-lg mb-2">Waiting for more players</p>
-                      <p className="text-slate-500">Need at least 4 players to start</p>
-                    </div>
-                  ) : gameRoom.status === "finished" ? (
-                    <div className="text-center">
-                      <div className="w-32 h-32 bg-slate-700/50 rounded-full flex items-center justify-center mb-4 mx-auto">
-                        {gameRoom.winner === "mafia" ? (
-                          <Skull className="w-16 h-16 text-red-400" />
-                        ) : gameRoom.winner === "villagers" ? (
-                          <Shield className="w-16 h-16 text-blue-400" />
-                        ) : (
-                          <Zap className="w-16 h-16 text-yellow-400" />
-                        )}
-                      </div>
-                      <p className="text-white text-2xl mb-2">Game Over!</p>
-                      <p className="text-slate-300 text-lg mb-4">
-                        {gameRoom.winner === "mafia" && "The Mafia has taken control!"}
-                        {gameRoom.winner === "villagers" && "The Villagers have prevailed!"}
-                        {gameRoom.winner === "jester" && "The Jester achieved chaos!"}
-                      </p>
-                      <Button onClick={() => router.push("/")} className="bg-purple-600 hover:bg-purple-700 text-white">
-                        Return to Lobby
-                      </Button>
-                    </div>
-                  ) : (
-                    <div className="text-center">
-                      <div className="w-32 h-32 bg-slate-700/50 rounded-full flex items-center justify-center mb-4 mx-auto">
-                        {gameRoom.current_phase === "night" ? (
-                          <div className="text-6xl">🌙</div>
-                        ) : (
-                          <div className="text-6xl">☀️</div>
-                        )}
-                      </div>
-                      <p className="text-white text-xl mb-2">
-                        {gameRoom.current_phase === "night" ? "Night Time" : "Day Time"}
-                      </p>
-                      <p className="text-slate-300 mb-4">
-                        {gameRoom.current_phase === "night"
-                          ? "Special roles are active. Make your moves carefully."
-                          : "Discuss and vote to eliminate a suspect."}
-                      </p>
-
-                      {currentPlayer.is_alive && gameRoom.status !== "finished" && (
-                        <div className="bg-slate-700/30 p-4 rounded-lg border border-slate-600">
-                          <p className="text-white font-medium mb-2">
-                            Your Role: {currentPlayer.role.charAt(0).toUpperCase() + currentPlayer.role.slice(1).replace('_', ' ')}
-                          </p>
-                          <p className="text-slate-300 text-sm">
-                            {gameRoom.current_phase === "night" &&
-                              currentPlayer.role === "mafia" &&
-                              "Choose a player to eliminate (coordinate with other mafia members)"}
-                            {gameRoom.current_phase === "night" &&
-                              currentPlayer.role === "doctor" &&
-                              (gameRoom.doctor_can_heal_same_twice 
-                                ? "Choose a player to protect (no restrictions)"
-                                : "Choose a player to protect (cannot heal same person twice in a row)"
-                              )}
-                            {gameRoom.current_phase === "night" &&
-                              currentPlayer.role === "detective" &&
-                              "Choose a player to investigate (you will get immediate results)"}
-                            {gameRoom.current_phase === "night" &&
-                              currentPlayer.role === "fake_detective" &&
-                              "Choose a player to investigate (your results may be incorrect)"}
-                            {gameRoom.current_phase === "night" &&
-                              (currentPlayer.role === "villager" || currentPlayer.role === "jester" || currentPlayer.role === "bandit") &&
-                              "Sleep tight, you have no night action"}
-                            {gameRoom.current_phase === "day" &&
-                              currentPlayer.role === "jester" &&
-                              "Try to get yourself voted out to win!"}
-                            {gameRoom.current_phase === "day" &&
-                              currentPlayer.role !== "jester" &&
-                              "Participate in the discussion and vote"}
-                          </p>
-                        </div>
-                      )}
-
-                      {!currentPlayer.is_alive && (
-                        <div className="bg-red-900/30 p-4 rounded-lg border border-red-600">
-                          <p className="text-red-200 font-medium mb-2">You are dead</p>
-                          <p className="text-red-300 text-sm">You can still watch the game but cannot participate</p>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
               </CardContent>
             </Card>
           </div>
@@ -622,6 +532,8 @@ export function GameRoom({ gameId }: GameRoomProps) {
                       className={`p-2 rounded text-sm ${
                         message.message_type === "system"
                           ? "bg-blue-900/30 text-blue-200 italic"
+                          : message.message_type === "private"
+                          ? "bg-purple-900/30 text-purple-200 italic"
                           : message.message_type === "vote"
                           ? "bg-yellow-900/30 text-yellow-200"
                           : message.message_type === "death"

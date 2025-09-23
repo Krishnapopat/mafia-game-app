@@ -45,28 +45,36 @@ export async function POST(
     // Create action
     await gameActions.create(gameId, player_id, action_type, target_id, game.current_phase, game.day_number)
 
-    // Handle immediate detective results
-    if (action_type === 'investigate' && player.role === 'detective') {
+    // Handle immediate detective results - PRIVATE MESSAGE ONLY
+    if (action_type === 'investigate' && (player.role === 'detective' || player.role === 'fake_detective')) {
       const participants = await gameParticipants.findByGame(gameId)
       const targetPlayer = participants.find(p => p.player_id === target_id)
       
       if (targetPlayer) {
-        const isMafia = ['mafia', 'bandit'].includes(targetPlayer.role)
-        const result = isMafia ? 'guilty' : 'innocent'
+        let result
+        if (player.role === 'detective') {
+          // Real detective gets truthful results
+          const isMafia = ['mafia', 'bandit'].includes(targetPlayer.role)
+          result = isMafia ? 'guilty' : 'innocent'
+        } else {
+          // Fake detective gets random results
+          result = Math.random() < 0.5 ? 'guilty' : 'innocent'
+        }
         
+        // Send PRIVATE message only to the detective
         await gameMessages.create(
           gameId, 
-          player_id, 
-          `Investigation result: ${targetPlayer.username} is ${result}.`, 
-          'system', 
+          null, 
+          `[PRIVATE] Investigation result: ${targetPlayer.username} is ${result}.`, 
+          'private', 
           player_id, 
           false
         )
       }
     }
 
-    // Add confirmation message
-    await gameMessages.create(gameId, player_id, `You have chosen your target for the night.`, 'system', player_id, false)
+    // Add confirmation message (private)
+    await gameMessages.create(gameId, null, `You have chosen your target for the night.`, 'private', player_id, false)
 
     // Check if all players with night actions have acted
     if (game.current_phase === 'night') {
@@ -101,114 +109,86 @@ async function checkAndTransitionPhase(gameId: number, game: any) {
     const uniquePlayersWhoHaveActed = [...new Set(playersWhoHaveActed)]
     
     // Check if all players with night actions have acted
-    const allNightActionsComplete = playersWithNightActions.every(player => 
-      uniquePlayersWhoHaveActed.includes(player.player_id)
-    )
-    
-    if (allNightActionsComplete && playersWithNightActions.length > 0) {
-      // Process night actions and transition to day
-      await processNightActions(gameId, game, nightActions, participants)
+    if (uniquePlayersWhoHaveActed.length >= playersWithNightActions.length) {
+      await processNightActions(gameId, game)
     }
   } catch (error) {
     console.error('Error checking phase transition:', error)
   }
 }
 
-async function processNightActions(gameId: number, game: any, nightActions: any[], participants: any[]) {
+async function processNightActions(gameId: number, game: any) {
   try {
-    // Process mafia kills
-    const mafiaKills = nightActions.filter(action => action.action_type === 'kill')
-    const doctorHeals = nightActions.filter(action => action.action_type === 'heal')
+    const participants = await gameParticipants.findByGame(gameId)
+    const aliveParticipants = participants.filter(p => p.is_alive)
     
-    let killedPlayers: number[] = []
+    // Get all night actions
+    const nightActions = await gameActions.findByGameAndPhase(gameId, 'night', game.day_number)
     
-    // Process each mafia kill (only if all mafia agreed on the same target)
-    if (mafiaKills.length > 0) {
-      const targetId = mafiaKills[0].target_id // All mafia should have the same target
+    // Process kills
+    const killActions = nightActions.filter(action => action.action_type === 'kill')
+    const healActions = nightActions.filter(action => action.action_type === 'heal')
+    
+    let killedPlayer = null
+    if (killActions.length > 0) {
+      // Get the target of the first kill (all mafia should target the same)
+      const targetId = killActions[0].target_id
       
-      // Check if doctor healed this target
-      const wasHealed = doctorHeals.some(heal => heal.target_id === targetId)
+      // Check if target was healed
+      const wasHealed = healActions.some(heal => heal.target_id === targetId)
       
       if (!wasHealed) {
-        // Player dies
-        await gameParticipants.updateAlive(gameId, targetId, false)
-        killedPlayers.push(targetId)
-        
-        const killedPlayer = participants.find(p => p.player_id === targetId)
+        killedPlayer = participants.find(p => p.player_id === targetId)
         if (killedPlayer) {
+          await gameParticipants.updateAlive(gameId, targetId, false)
           await gameMessages.create(
             gameId, 
             null, 
-            `${killedPlayer.username} has been eliminated during the night!`, 
+            `${killedPlayer.username} was killed during the night!`, 
             'death', 
             null, 
-            true
+            false
           )
         }
       } else {
-        // Player was healed
-        const healedPlayer = participants.find(p => p.player_id === targetId)
-        if (healedPlayer) {
-          await gameMessages.create(
-            gameId, 
-            null, 
-            `${healedPlayer.username} was protected by the doctor!`, 
-            'system', 
-            null, 
-            true
-          )
-        }
-      }
-    }
-    
-    // Process fake detective investigations (random results)
-    const fakeInvestigations = nightActions.filter(action => 
-      action.action_type === 'investigate' && 
-      (action.player_id && participants.find(p => p.player_id === action.player_id)?.role === 'fake_detective')
-    )
-    
-    for (const investigation of fakeInvestigations) {
-      const targetId = investigation.target_id
-      const targetPlayer = participants.find(p => p.player_id === targetId)
-      const fakeDetective = participants.find(p => p.player_id === investigation.player_id)
-      
-      if (targetPlayer && fakeDetective) {
-        // Random result for fake detective
-        const randomResult = Math.random() < 0.5 ? 'guilty' : 'innocent'
-        
         await gameMessages.create(
           gameId, 
-          investigation.player_id, 
-          `Investigation result: ${targetPlayer.username} is ${randomResult}.`, 
+          null, 
+          `Someone was attacked but saved by the doctor!`, 
           'system', 
-          investigation.player_id, 
+          null, 
           false
         )
       }
     }
     
+    // Clear night actions
+    await gameActions.clearByGameAndPhase(gameId, game.day_number)
+    
     // Check win conditions
-    const aliveParticipants = participants.filter(p => p.is_alive)
-    const aliveMafia = aliveParticipants.filter(p => ['mafia', 'bandit'].includes(p.role))
-    const aliveVillagers = aliveParticipants.filter(p => !['mafia', 'bandit'].includes(p.role))
+    const newAliveParticipants = participants.filter(p => p.is_alive)
+    const aliveMafia = newAliveParticipants.filter(p => p.role === 'mafia')
+    const aliveVillagers = newAliveParticipants.filter(p => ['villager', 'doctor', 'detective', 'fake_detective'].includes(p.role))
+    const aliveJester = newAliveParticipants.filter(p => p.role === 'jester')
     
     let winner = null
     if (aliveMafia.length === 0) {
-      winner = 'villagers'
+      winner = 'Villagers'
     } else if (aliveMafia.length >= aliveVillagers.length) {
-      winner = 'mafia'
+      winner = 'Mafia'
+    } else if (aliveJester.length > 0 && killedPlayer && killedPlayer.role === 'jester') {
+      winner = 'Jester'
     }
     
     if (winner) {
-      // Game over
       await gameRooms.updateStatus(gameId, 'finished', 'finished', game.day_number)
       await gameMessages.create(
         gameId, 
         null, 
-        `Game Over! ${winner === 'mafia' ? 'The Mafia' : 'The Villagers'} win!`, 
+        `Game Over - ${winner} win!`, 
         'system', 
         null, 
-        true
+        false
       )
     } else {
       // Transition to day phase
@@ -216,13 +196,12 @@ async function processNightActions(gameId: number, game: any, nightActions: any[
       await gameMessages.create(
         gameId, 
         null, 
-        `Day ${game.day_number} begins. Discuss and vote to eliminate a suspect.`, 
+        `Day ${game.day_number} begins. Discuss and vote to eliminate a player.`, 
         'system', 
         null, 
-        true
+        false
       )
     }
-    
   } catch (error) {
     console.error('Error processing night actions:', error)
   }

@@ -10,7 +10,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Find room by code
-    const room = await gameRooms.findByCode(room_code)
+    const room = await gameRooms.findByRoomCode(room_code)
     if (!room) {
       return NextResponse.json({ message: 'Room not found or game already started' }, { status: 404 })
     }
@@ -26,11 +26,11 @@ export async function POST(request: NextRequest) {
     }
 
     // Join the room
-    await gameParticipants.create(room.id, player_id, 'villager', false)
+    await gameParticipants.create(room.id, player_id, false, 'villager')
     
     // Update player count
     await gameRooms.updatePlayerCount(room.id, room.current_players + 1)
-
+    
     // Add join message
     await gameMessages.create(room.id, null, `Player joined the game`, 'system', null, true)
 

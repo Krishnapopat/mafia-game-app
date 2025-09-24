@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { gameRooms, generateRoomCode } from '@/lib/db/database'
+import { gameRooms } from '@/lib/db/database'
 
 export async function GET() {
   try {
@@ -19,9 +19,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: 'Missing required fields' }, { status: 400 })
     }
 
-    const roomCode = generateRoomCode()
     const room = await gameRooms.create(
-      roomCode,
       name,
       host_id,
       max_players,

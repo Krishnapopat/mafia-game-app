@@ -96,6 +96,13 @@ export function GameRoom({ gameId }: GameRoomProps) {
     return () => clearInterval(interval)
   }, [gameId])
 
+  // Reset hasActed when phase changes
+  useEffect(() => {
+    if (gameRoom) {
+      setHasActed(false)
+    }
+  }, [gameRoom?.current_phase, gameRoom?.day_number])
+
     const fetchGameData = async () => {
     try {
       // Get current player ID for message filtering
@@ -415,6 +422,28 @@ export function GameRoom({ gameId }: GameRoomProps) {
             <CardContent className="p-6 text-center">
               <h2 className="text-3xl font-bold text-white mb-2">Game Over!</h2>
               <p className="text-2xl text-green-400">{gameRoom.winner || 'Unknown'} wins!</p>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Phase Indicator */}
+        {gameRoom.status === "in_progress" && (
+          <Card className="bg-slate-800/50 border-slate-700 backdrop-blur-sm mb-6">
+            <CardContent className="p-4 text-center">
+              <div className="flex items-center justify-center gap-4">
+                <div className="flex items-center gap-2">
+                  <Clock className="w-5 h-5 text-blue-400" />
+                  <span className="text-white font-semibold">
+                    {gameRoom.current_phase === "night" ? `Night ${gameRoom.day_number}` : `Day ${gameRoom.day_number}`}
+                  </span>
+                </div>
+                <div className="text-slate-300">
+                  {gameRoom.current_phase === "night" 
+                    ? "Mafia, Doctor, and Detectives choose your actions"
+                    : "Discuss and vote to eliminate a player"
+                  }
+                </div>
+              </div>
             </CardContent>
           </Card>
         )}

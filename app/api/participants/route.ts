@@ -39,8 +39,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: 'Room is full' }, { status: 400 })
     }
 
-    // Create participant
-    await gameParticipants.create(game_id, player_id, 'villager', is_host || false)
+    // Create participant - FIXED PARAMETER ORDER
+    await gameParticipants.create(game_id, player_id, is_host || false, 'villager')
 
     // Update player count
     await gameRooms.updatePlayerCount(game_id, currentCount + 1)

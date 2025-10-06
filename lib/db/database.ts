@@ -615,6 +615,32 @@ export const gameParticipants = {
     }
   },
   
+  async updateHost(gameId: number, playerId: number, isHost: boolean) {
+    if (isProduction) {
+      await pool!.query(
+        'UPDATE game_participants SET is_host = $1 WHERE game_id = $2 AND player_id = $3',
+        [isHost, gameId, playerId]
+      )
+      return
+    }
+    
+    if (isVercel) {
+      if (!memoryDb) await initDatabase()
+      const participant = memoryDb.game_participants.find((p: any) => p.game_id === gameId && p.player_id === playerId)
+      if (participant) {
+        participant.is_host = isHost
+      }
+      return
+    }
+    
+    const db = await readDb()
+    const participant = db.game_participants.find((p: any) => p.game_id === gameId && p.player_id === playerId)
+    if (participant) {
+      participant.is_host = isHost
+      await writeDb(db)
+    }
+  },
+  
   async remove(gameId: number, playerId: number) {
     if (isProduction) {
       await pool!.query(

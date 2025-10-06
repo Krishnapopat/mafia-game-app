@@ -294,7 +294,8 @@ export function GameRoom({ gameId }: GameRoomProps) {
         return participants.filter((p) => p.is_alive && p.player_id !== currentPlayer.player_id)
       }
     } else if (gameRoom?.current_phase === "day") {
-      return participants.filter((p) => p.is_alive && p.player_id !== currentPlayer.player_id)
+      // During day phase, all alive players can vote for anyone (including themselves)
+      return participants.filter((p) => p.is_alive)
     }
 
     return []
@@ -536,6 +537,20 @@ export function GameRoom({ gameId }: GameRoomProps) {
                 {hasActed && (
                   <div className="mt-4 p-3 bg-green-900/30 border border-green-600 rounded-lg">
                     <p className="text-green-200 text-center">You have completed your action for this phase.</p>
+                  </div>
+                )}
+
+                {/* Debug info for voting issues */}
+                {gameRoom?.current_phase === "day" && (
+                  <div className="mt-4 p-3 bg-blue-900/30 border border-blue-600 rounded-lg text-sm">
+                    <p className="text-blue-200">
+                      <strong>Debug Info:</strong><br/>
+                      Can Act: {canAct() ? 'Yes' : 'No'}<br/>
+                      Is Alive: {currentPlayer?.is_alive ? 'Yes' : 'No'}<br/>
+                      Has Acted: {hasActed ? 'Yes' : 'No'}<br/>
+                      Available Targets: {availableTargets.length}<br/>
+                      Phase: {gameRoom.current_phase}
+                    </p>
                   </div>
                 )}
               </CardContent>

@@ -125,39 +125,44 @@ async function processVotes(gameId: number, game: any) {
         null, 
         false
       )
+      
+      // Check win conditions immediately after elimination
+      const participants = await gameParticipants.findByGame(gameId)
+      const aliveParticipants = participants.filter(p => p.is_alive)
+      const aliveMafia = aliveParticipants.filter(p => p.role === 'mafia')
+      const aliveBandit = aliveParticipants.filter(p => p.role === 'bandit')
+      const aliveVillagers = aliveParticipants.filter(p => ['villager', 'doctor', 'detective', 'fake_detective'].includes(p.role))
+      
+      let winner = null
+      if (aliveMafia.length === 0 && aliveBandit.length === 0) {
+        winner = 'Villagers'
+      } else if ((aliveMafia.length + aliveBandit.length) >= aliveVillagers.length) {
+        winner = 'Mafia'
+      } else if (eliminatedPlayer.role === 'jester') {
+        winner = 'Jester'
+      }
+      
+      if (winner) {
+        await gameRooms.updateStatus(gameId, 'finished', 'finished', game.day_number)
+        await gameRooms.updateWinner(gameId, winner)
+        await gameMessages.create(
+          gameId, 
+          null, 
+          `Game Over - ${winner} win!`, 
+          'system', 
+          null, 
+          false
+        )
+        return // Exit early if game is over
+      }
     }
     
     // Clear day votes
     await gameActions.clearByGameAndPhase(gameId, game.day_number)
     
-    // Check win conditions
-    const newAliveParticipants = participants.filter(p => p.is_alive)
-    const aliveMafia = newAliveParticipants.filter(p => p.role === 'mafia')
-    const aliveBandit = newAliveParticipants.filter(p => p.role === 'bandit')
-    const aliveVillagers = newAliveParticipants.filter(p => ['villager', 'doctor', 'detective', 'fake_detective'].includes(p.role))
-    const aliveJester = newAliveParticipants.filter(p => p.role === 'jester')
-    
-    let winner = null
-    if (aliveMafia.length === 0 && aliveBandit.length === 0) {
-      winner = 'Villagers'
-    } else if ((aliveMafia.length + aliveBandit.length) >= aliveVillagers.length) {
-      winner = 'Mafia'
-    } else if (aliveJester.length > 0 && eliminatedPlayer && eliminatedPlayer.role === 'jester') {
-      winner = 'Jester'
-    }
-    
-    if (winner) {
-      await gameRooms.updateStatus(gameId, 'finished', 'finished', game.day_number)
-      await gameRooms.updateWinner(gameId, winner)
-      await gameMessages.create(
-        gameId, 
-        null, 
-        `Game Over - ${winner} win!`, 
-        'system', 
-        null, 
-        false
-      )
-    } else {
+    // Only continue to night phase if game is not over
+    const currentGame = await gameRooms.findById(gameId)
+    if (currentGame.status !== 'finished') {
       // Transition to night phase
       const nextDay = game.day_number + 1
       await gameRooms.updateStatus(gameId, 'in_progress', 'night', nextDay)

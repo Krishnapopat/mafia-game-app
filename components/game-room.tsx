@@ -423,9 +423,9 @@ export function GameRoom({ gameId }: GameRoomProps) {
               <h2 className="text-3xl font-bold text-white mb-2">Game Over!</h2>
               <p className="text-2xl text-green-400">
                 {gameRoom.winner === 'Villagers' ? 'Villagers win!' : 
-                 gameRoom.winner === 'Mafia' ? 'Mafia win!' :
+                 gameRoom.winner === 'Mafia' ? 'Mafia wins!' :
                  gameRoom.winner === 'Jester' ? 'Jester wins!' :
-                 gameRoom.winner || 'Unknown'} wins!
+                 gameRoom.winner ? `${gameRoom.winner} wins!` : 'Unknown wins!'}
               </p>
             </CardContent>
           </Card>

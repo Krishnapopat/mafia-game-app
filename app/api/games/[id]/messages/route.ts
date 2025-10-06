@@ -6,7 +6,11 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   try {
-    const messages = await gameMessages.findByGame(parseInt(params.id))
+    // Get player_id from query parameters
+    const { searchParams } = new URL(request.url)
+    const playerId = searchParams.get('player_id')
+    
+    const messages = await gameMessages.findByGame(parseInt(params.id), playerId ? parseInt(playerId) : 0)
     return NextResponse.json(messages)
   } catch (error) {
     console.error('Error fetching messages:', error)

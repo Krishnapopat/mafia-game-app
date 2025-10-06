@@ -96,12 +96,16 @@ export function GameRoom({ gameId }: GameRoomProps) {
     return () => clearInterval(interval)
   }, [gameId])
 
-  const fetchGameData = async () => {
+    const fetchGameData = async () => {
     try {
+      // Get current player ID for message filtering
+      const savedPlayer = localStorage.getItem('mafia_player')
+      const playerId = savedPlayer ? JSON.parse(savedPlayer).id : null
+      
       const [roomRes, participantsRes, messagesRes] = await Promise.all([
         fetch(`/api/games/${gameId}`),
         fetch(`/api/games/${gameId}/participants`),
-        fetch(`/api/games/${gameId}/messages`)
+        fetch(`/api/games/${gameId}/messages${playerId ? `?player_id=${playerId}` : ''}`)
       ])
 
       if (roomRes.ok) {
@@ -116,30 +120,19 @@ export function GameRoom({ gameId }: GameRoomProps) {
       if (participantsRes.ok) {
         const participantsData = await participantsRes.json()
         setParticipants(participantsData)
-        
-        // Find current player
+
+      // Find current player
         const savedPlayer = localStorage.getItem('mafia_player')
         if (savedPlayer) {
           const player = JSON.parse(savedPlayer)
           const currentParticipant = participantsData.find((p: GameParticipant) => p.player_id === player.id)
-          setCurrentPlayer(currentParticipant || null)
+      setCurrentPlayer(currentParticipant || null)
         }
       }
 
       if (messagesRes.ok) {
         const messagesData = await messagesRes.json()
-        
-        // Filter messages based on visibility
-        const savedPlayer = localStorage.getItem('mafia_player')
-        if (savedPlayer) {
-          const player = JSON.parse(savedPlayer)
-          const filteredMessages = messagesData.filter((msg: GameMessage) => 
-            !msg.visible_to_player_id || msg.visible_to_player_id === player.id
-          )
-          setMessages(filteredMessages)
-        } else {
-          setMessages(messagesData)
-        }
+        setMessages(messagesData)
         
         // Check for room deletion message
         const deletionMessage = messagesData.find((msg: GameMessage) => 
@@ -182,13 +175,13 @@ export function GameRoom({ gameId }: GameRoomProps) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: newMessage.trim(),
+        message: newMessage.trim(),
           player_id: currentPlayer.player_id
         })
       })
 
       if (response.ok) {
-        setNewMessage("")
+      setNewMessage("")
         fetchGameData()
       }
     } catch (error) {
@@ -205,7 +198,7 @@ export function GameRoom({ gameId }: GameRoomProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action_type: getActionType(),
-          target_id: selectedTarget,
+        target_id: selectedTarget,
           player_id: currentPlayer.player_id
         })
       })
@@ -231,7 +224,7 @@ export function GameRoom({ gameId }: GameRoomProps) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          target_id: selectedTarget,
+        target_id: selectedTarget,
           player_id: currentPlayer.player_id
         })
       })
@@ -394,7 +387,7 @@ export function GameRoom({ gameId }: GameRoomProps) {
               <Badge className="bg-gray-600 text-white">
                 <Users className="w-4 h-4 mr-1" />
                 Waiting for Game Start
-              </Badge>
+            </Badge>
             )}
             <Button
               onClick={handleLeaveGame}

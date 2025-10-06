@@ -133,13 +133,14 @@ async function processVotes(gameId: number, game: any) {
     // Check win conditions
     const newAliveParticipants = participants.filter(p => p.is_alive)
     const aliveMafia = newAliveParticipants.filter(p => p.role === 'mafia')
+    const aliveBandit = newAliveParticipants.filter(p => p.role === 'bandit')
     const aliveVillagers = newAliveParticipants.filter(p => ['villager', 'doctor', 'detective', 'fake_detective'].includes(p.role))
     const aliveJester = newAliveParticipants.filter(p => p.role === 'jester')
     
     let winner = null
-    if (aliveMafia.length === 0) {
+    if (aliveMafia.length === 0 && aliveBandit.length === 0) {
       winner = 'Villagers'
-    } else if (aliveMafia.length >= aliveVillagers.length) {
+    } else if ((aliveMafia.length + aliveBandit.length) >= aliveVillagers.length) {
       winner = 'Mafia'
     } else if (aliveJester.length > 0 && eliminatedPlayer && eliminatedPlayer.role === 'jester') {
       winner = 'Jester'
@@ -147,6 +148,7 @@ async function processVotes(gameId: number, game: any) {
     
     if (winner) {
       await gameRooms.updateStatus(gameId, 'finished', 'finished', game.day_number)
+      await gameRooms.updateWinner(gameId, winner)
       await gameMessages.create(
         gameId, 
         null, 

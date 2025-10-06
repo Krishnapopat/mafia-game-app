@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS game_actions (
     player_id INTEGER REFERENCES players(id),
     action_type VARCHAR(20) NOT NULL,
     target_id INTEGER REFERENCES players(id),
+    phase VARCHAR(20) NOT NULL,
     day_number INTEGER NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

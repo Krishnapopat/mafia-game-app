@@ -539,36 +539,22 @@ export function GameRoom({ gameId }: GameRoomProps) {
                     <p className="text-green-200 text-center">You have completed your action for this phase.</p>
                   </div>
                 )}
-
-                {/* Debug info for voting issues */}
-                {gameRoom?.current_phase === "day" && (
-                  <div className="mt-4 p-3 bg-blue-900/30 border border-blue-600 rounded-lg text-sm">
-                    <p className="text-blue-200">
-                      <strong>Debug Info:</strong><br/>
-                      Can Act: {canAct() ? 'Yes' : 'No'}<br/>
-                      Is Alive: {currentPlayer?.is_alive ? 'Yes' : 'No'}<br/>
-                      Has Acted: {hasActed ? 'Yes' : 'No'}<br/>
-                      Available Targets: {availableTargets.length}<br/>
-                      Phase: {gameRoom.current_phase}
-                    </p>
-                  </div>
-                )}
               </CardContent>
             </Card>
           </div>
 
           {/* Chat Panel */}
           <div className="lg:col-span-1">
-            <Card className="bg-slate-800/50 border-slate-700 backdrop-blur-sm h-[600px]">
-              <CardHeader>
+            <Card className="bg-slate-800/50 border-slate-700 backdrop-blur-sm h-[600px] flex flex-col">
+              <CardHeader className="flex-shrink-0">
                 <CardTitle className="text-white flex items-center gap-2">
                   <MessageCircle className="w-5 h-5" />
                   Chat
                 </CardTitle>
               </CardHeader>
-              <CardContent className="h-full flex flex-col">
+              <CardContent className="flex-1 flex flex-col p-0">
                 {/* Messages */}
-                <div className="flex-1 overflow-y-auto space-y-2 mb-4">
+                <div className="flex-1 overflow-y-auto space-y-2 p-6 pb-4">
                   {messages.map((message) => (
                     <div
                       key={message.id}
@@ -591,23 +577,25 @@ export function GameRoom({ gameId }: GameRoomProps) {
                 </div>
 
                 {/* Message Input */}
-                <form onSubmit={handleSendMessage} className="flex gap-2">
-                  <Input
-                    value={newMessage}
-                    onChange={(e) => setNewMessage(e.target.value)}
-                    placeholder="Type a message..."
-                    className="bg-slate-700/50 border-slate-600 text-white placeholder:text-slate-400"
-                    disabled={gameRoom.status === "waiting" || gameRoom.status === "finished"}
-                  />
-                  <Button
-                    type="submit"
-                    size="sm"
-                    disabled={!newMessage.trim() || gameRoom.status === "waiting" || gameRoom.status === "finished"}
-                    className="bg-purple-600 hover:bg-purple-700 text-white"
-                  >
-                    Send
-                  </Button>
-                </form>
+                <div className="flex-shrink-0 p-6 pt-0 bg-slate-800/50">
+                  <form onSubmit={handleSendMessage} className="flex gap-2">
+                    <Input
+                      value={newMessage}
+                      onChange={(e) => setNewMessage(e.target.value)}
+                      placeholder="Type a message..."
+                      className="bg-slate-700/50 border-slate-600 text-white placeholder:text-slate-400"
+                      disabled={gameRoom.status === "waiting" || gameRoom.status === "finished"}
+                    />
+                    <Button
+                      type="submit"
+                      size="sm"
+                      disabled={!newMessage.trim() || gameRoom.status === "waiting" || gameRoom.status === "finished"}
+                      className="bg-purple-600 hover:bg-purple-700 text-white"
+                    >
+                      Send
+                    </Button>
+                  </form>
+                </div>
               </CardContent>
             </Card>
           </div>
